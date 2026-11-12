@@ -445,7 +445,8 @@ namespace Fenster {
                         set_fullscreen (c, want (action, c.fullscreen));
                     } else if (prop == atoms.net_wm_state_maximized_vert
                                || prop == atoms.net_wm_state_maximized_horz) {
-                        set_maximized (c, want (action, c.maximized));
+                        bool on = want (action, c.maximized);
+                        animated (c, () => set_maximized (c, on));
                         break; /* vert y horz llegan juntos: una sola vez */
                     } else if (prop == atoms.net_wm_state_hidden) {
                         if (want (action, c.minimized)) minimize (c); else activate (c);
@@ -684,6 +685,10 @@ namespace Fenster {
                 c.anim.finish ();
                 c.anim = null;
             }
+            if (c.morph != null) {
+                c.morph.finish ();
+                c.morph = null;
+            }
             if (c.paint_damage != 0 && !destroyed) {
                 Xd.destroy (dpy, c.paint_damage);
             }
@@ -893,6 +898,24 @@ namespace Fenster {
             }
             order.foreach ((c) => { dpy.raise_window (c.win); });
             stacking = order;
+            keep_overlays_on_top ();
+        }
+
+        /* Las capas propias de Fenster (animaciones, Alt+Tab) van siempre por
+         * encima de las ventanas; la vista previa, justo debajo de la que se
+         * arrastra. Sin esto, reordenar (p. ej. enfocar la siguiente ventana al
+         * minimizar) tapaba la animación. */
+        void keep_overlays_on_top () {
+            clients.foreach ((c) => {
+                if (c.anim != null && !c.anim.finished) c.anim.raise_above ();
+                if (c.morph != null && !c.morph.finished) c.morph.raise_above ();
+            });
+            if (switcher != null && switcher.visible) {
+                switcher.raise ();
+            }
+            if (preview != null && drag_client != null) {
+                preview.restack_below (drag_client.win);
+            }
         }
 
         void grab_buttons (Client c, bool is_focused) {
@@ -998,6 +1021,76 @@ namespace Fenster {
             if (after != null) after ();
         }
 
+        /* ---------------------------------------------------------------- */
+        /* Transiciones de geometría (maximizar, ajustar, cambiar de monitor) */
+        /* ---------------------------------------------------------------- */
+
+        public delegate void Change ();
+
+        /* Ejecuta un cambio de geometría con transición animada. */
+        void animated (Client c, Change change) {
+            if (c.morph != null) {
+                c.morph.finish ();
+                c.morph = null;
+            }
+            bool can = config.animations && !c.kind.is_chrome () && !c.minimized
+                       && !c.hidden_by_desktop && !c.fullscreen;
+            Rect area = c.geom;
+            var shot = can ? snapshot (c, out area) : null;
+            if (shot == null) {
+                change ();
+                return;
+            }
+            var old = c.geom;
+            /* La ventana real, invisible mientras cambia de tamaño y se redibuja */
+            set_anim (c, "morph");
+            hide_with_opacity (c);
+            change ();
+            var now = c.geom;
+            if (now.x == old.x && now.y == old.y && now.w == old.w && now.h == old.h) {
+                restore_opacity (c);
+                return;
+            }
+            var win = c.win;
+            var m = new MorphAnimation (dpy, root, screen, atoms, shot, area, clip_to_screen (now), () => {
+                var still = find (win);
+                if (still != null) {
+                    set_anim (still, "morph");  /* sin fundido de picom al reaparecer */
+                    restore_opacity (still);
+                    dpy.flush ();
+                }
+            });
+            c.morph = m;
+            wait_for_paint (c);
+            m.start ();
+        }
+
+        Rect clip_to_screen (Rect g) {
+            int x0 = int.max (g.x, 0), y0 = int.max (g.y, 0);
+            int x1 = int.min (g.x + g.w, screen_w), y1 = int.min (g.y + g.h, screen_h);
+            return Rect (x0, y0, int.max (1, x1 - x0), int.max (1, y1 - y0));
+        }
+
+        void hide_with_opacity (Client c) {
+            if (c.saved_opacity.length == 0) {
+                var cur = get_longs (c.win, atoms.net_wm_window_opacity, Xc.XA_CARDINAL, 1);
+                c.saved_opacity = cur.length > 0 ? cur : new long[] { -1 };
+            }
+            set_prop (c.win, atoms.net_wm_window_opacity, Xc.XA_CARDINAL, { 0 });
+        }
+
+        void restore_opacity (Client c) {
+            if (c.saved_opacity.length == 0) {
+                return;
+            }
+            if (c.saved_opacity[0] == -1) {
+                dpy.delete_property (c.win, atoms.net_wm_window_opacity);
+            } else {
+                set_prop (c.win, atoms.net_wm_window_opacity, Xc.XA_CARDINAL, c.saved_opacity);
+            }
+            c.saved_opacity = {};
+        }
+
         /* DAMAGE avisa cuando la ventana recién mostrada ya tiene contenido. */
         void wait_for_paint (Client c) {
             if (damage_event_base < 0) {
@@ -1016,6 +1109,10 @@ namespace Fenster {
             }
             Xd.destroy (dpy, c.paint_damage);
             c.paint_damage = 0;
+            if (c.morph != null && !c.morph.finished) {
+                c.morph.mark_painted ();
+                return;
+            }
             /* Dos fotogramas para que el compositor muestre lo pintado */
             var anim = c.anim;
             Timeout.add (32, () => {
@@ -1285,7 +1382,9 @@ namespace Fenster {
             }
             drag_zone = zone;
             drag_zone_mon = mon;
-            preview.update (zone, zone.rect (mon.work), c != null ? c.win : 0);
+            preview.update (zone, zone.rect (mon.work), mon,
+                            c != null ? LinkedResize.visible (c, c.geom) : Rect (x, y, 1, 1),
+                            c != null ? c.win : 0);
         }
 
         void on_button_release (int x, int y) {
@@ -1301,7 +1400,7 @@ namespace Fenster {
                 return;
             }
             /* Soltar en un borde exterior: mitad, cuarto (esquinas) o maximizar (arriba) */
-            snap (c, zone, mon);
+            animated (c, () => snap (c, zone, mon));
         }
 
         /* Ventanas pegadas al borde que se va a arrastrar (mismo escritorio, visibles). */
@@ -1455,26 +1554,29 @@ namespace Fenster {
             if (mods == Xc.MOD1 && sym == Xc.XK_F4) {
                 close (c);
             } else if (mods == Xc.MOD4 && sym == Xc.XK_LEFT) {
-                snap (c, SnapZone.LEFT);
+                animated (c, () => snap (c, SnapZone.LEFT));
             } else if (mods == Xc.MOD4 && sym == Xc.XK_RIGHT) {
-                snap (c, SnapZone.RIGHT);
+                animated (c, () => snap (c, SnapZone.RIGHT));
             } else if (mods == Xc.MOD4 && sym == Xc.XK_UP) {
                 /* Mitad → cuarto superior → maximizar; sin ajustar: maximizar/restaurar */
                 if (c.snapped) {
-                    snap (c, c.snap_zone.up ());
+                    var z = c.snap_zone.up ();
+                    animated (c, () => snap (c, z));
                 } else {
-                    set_maximized (c, !c.maximized);
+                    bool on = !c.maximized;
+                    animated (c, () => set_maximized (c, on));
                 }
             } else if (mods == (Xc.MOD4 | Xc.SHIFT) && sym == Xc.XK_LEFT) {
-                move_to_neighbor (c, -1);
+                animated (c, () => move_to_neighbor (c, -1));
             } else if (mods == (Xc.MOD4 | Xc.SHIFT) && sym == Xc.XK_RIGHT) {
-                move_to_neighbor (c, 1);
+                animated (c, () => move_to_neighbor (c, 1));
             } else if (mods == Xc.MOD4 && sym == Xc.XK_DOWN) {
                 /* Mitad → cuarto inferior → restaurar; restaurada → minimizar */
                 if (c.snapped) {
-                    snap (c, c.snap_zone.down ());
+                    var z = c.snap_zone.down ();
+                    animated (c, () => snap (c, z));
                 } else if (c.maximized) {
-                    set_maximized (c, false);
+                    animated (c, () => set_maximized (c, false));
                 } else {
                     minimize (c);
                 }

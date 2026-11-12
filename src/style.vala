@@ -15,6 +15,10 @@ namespace Fenster.Style {
     public const int CLOSE_MS = 120;       /* HideTime */
     public const int MINIMIZE_MS = 300;    /* SlideTime */
 
+    /* Transición de geometría (maximizar, ajustar, cambiar de monitor) */
+    public const int MORPH_MS = 200;
+    public const int MORPH_FADE_MS = 90;      /* fundido cruzado al terminar */
+
     /* Minimizar/restaurar en el sitio: encoger, bajar y desvanecer */
     public const int MINIMIZE_ANIM_MS = 220;
     public const double MINIMIZE_SCALE = 0.90;
@@ -35,11 +39,16 @@ namespace Fenster.Style {
     public const int SWITCHER_CELL_GAP = 6;
     public const double SWITCHER_SELECTED_ALPHA = 0.16;
     public const int SWITCHER_DELAY_MS = 120;  /* no parpadea con Alt+Tab rápido */
+    public const int SWITCHER_APPEAR_MS = 120; /* HideTime de Dock-e */
+    public const double SWITCHER_APPEAR_SCALE = 0.97;
+    public const int SWITCHER_PILL_MS = 90;
 
     /* Vista previa del ajuste al arrastrar a un borde */
     public const int SNAP_PREVIEW_INSET = 8;
     public const double SNAP_PREVIEW_ALPHA = 0.40;
     public const double SNAP_PREVIEW_STROKE_ALPHA = 0.25;
+    public const int SNAP_PREVIEW_MS = 150;       /* aparecer / cambiar de zona */
+    public const int SNAP_PREVIEW_FADE_MS = 100;  /* desaparecer */
 
     /* Separación entre ventanas al ajustarlas a mitades/cuartos (px) */
     public const int SNAP_GAP = 0;

@@ -13,13 +13,21 @@ namespace Fenster {
 
     /* Panel del Alt+Tab al estilo macOS con la estética de Dock-e:
      * negro sólido, esquinas redondeadas, iconos grandes y una "pastilla"
-     * translúcida sobre la app seleccionada. Sin texto. Ventana ARGB
-     * override-redirect: las esquinas y la animación las compone picom. */
+     * translúcida sobre la app seleccionada. Sin texto. Aparece creciendo
+     * del 97 % con un fundido (120 ms) y la pastilla se desliza (90 ms). */
     public class Switcher {
         ArgbWindow aw;
         GenericArray<SwitcherItem> items = new GenericArray<SwitcherItem> ();
         int index = 0;
         int icon_size = Style.SWITCHER_ICON;
+
+        /* Animaciones: aparecer (escala 97 % → 100 % + fundido) y la pastilla
+         * de selección deslizándose entre iconos. */
+        uint ticker = 0;
+        int64 appear_start = 0;
+        int64 pill_start = 0;
+        double pill_from = 0;
+        double pill_to = 0;
 
         public bool visible {
             get { return aw.visible; }
@@ -37,17 +45,80 @@ namespace Fenster {
             this.items = items;
             this.index = index;
             layout (mon);
+            appear_start = get_monotonic_time ();
+            pill_from = pill_to = cell_x (index);
+            pill_start = 0;
             aw.show ();
             draw ();
+            tick ();
         }
 
         public void select (int index) {
+            if (aw.visible && index != this.index) {
+                pill_from = pill_x ();
+                pill_to = cell_x (index);
+                pill_start = get_monotonic_time ();
+            } else {
+                pill_from = pill_to = cell_x (index);
+            }
             this.index = index;
             draw ();
+            tick ();
+        }
+
+        public void raise () {
+            aw.raise ();
         }
 
         public void hide () {
+            if (ticker != 0) {
+                Source.remove (ticker);
+                ticker = 0;
+            }
             aw.hide ();
+        }
+
+        static double ease_out_cubic (double t) {
+            t = double.min (1, double.max (0, t));
+            double u = 1 - t;
+            return 1 - u * u * u;
+        }
+
+        double progress (int64 since, int ms) {
+            if (since == 0) return 1;
+            return ease_out_cubic ((get_monotonic_time () - since) / (ms * 1000.0));
+        }
+
+        bool animating () {
+            int64 now = get_monotonic_time ();
+            return (now - appear_start) < Style.SWITCHER_APPEAR_MS * 1000
+                || (pill_start != 0 && (now - pill_start) < Style.SWITCHER_PILL_MS * 1000);
+        }
+
+        /* Redibuja a ~120 fps mientras haya algo animándose. */
+        void tick () {
+            if (ticker != 0 || !aw.visible) {
+                return;
+            }
+            ticker = Timeout.add_full (Priority.HIGH, 8, () => {
+                draw ();
+                if (!animating ()) {
+                    draw ();
+                    ticker = 0;
+                    return Source.REMOVE;
+                }
+                return Source.CONTINUE;
+            });
+        }
+
+        double cell_x (int i) {
+            int cell = icon_size + 2 * Style.SWITCHER_CELL_PADDING;
+            return Style.SWITCHER_PADDING + i * (cell + Style.SWITCHER_CELL_GAP);
+        }
+
+        double pill_x () {
+            double p = progress (pill_start, Style.SWITCHER_PILL_MS);
+            return pill_from + (pill_to - pill_from) * p;
         }
 
         void layout (Monitor mon) {
@@ -75,6 +146,14 @@ namespace Fenster {
             var cr = new Cairo.Context (img);
             cr.set_antialias (Cairo.Antialias.BEST);
 
+            /* Aparecer: crece del 97 % al 100 % sobre su centro mientras se funde */
+            double a = progress (appear_start, Style.SWITCHER_APPEAR_MS);
+            double k = 1 - (1 - Style.SWITCHER_APPEAR_SCALE) * (1 - a);
+            cr.translate (width / 2.0, height / 2.0);
+            cr.scale (k, k);
+            cr.translate (-width / 2.0, -height / 2.0);
+            cr.push_group ();
+
             /* Panel: negro sólido como Dock-e */
             ArgbWindow.rounded (cr, 0, 0, width, height, Style.SWITCHER_RADIUS);
             cr.set_source_rgba (0, 0, 0, 1);
@@ -82,14 +161,15 @@ namespace Fenster {
 
             int pad = Style.SWITCHER_PADDING, cp = Style.SWITCHER_CELL_PADDING, gap = Style.SWITCHER_CELL_GAP;
             int cell = icon_size + 2 * cp;
+            /* Pastilla de selección: se desliza hasta la app elegida */
+            if (index >= 0 && index < items.length) {
+                ArgbWindow.rounded (cr, pill_x (), pad, cell, cell, Style.SWITCHER_CELL_RADIUS);
+                cr.set_source_rgba (1, 1, 1, Style.SWITCHER_SELECTED_ALPHA);
+                cr.fill ();
+            }
             for (int i = 0; i < items.length; i++) {
                 double cx = pad + i * (cell + gap);
                 double cy = pad;
-                if (i == index) {
-                    ArgbWindow.rounded (cr, cx, cy, cell, cell, Style.SWITCHER_CELL_RADIUS);
-                    cr.set_source_rgba (1, 1, 1, Style.SWITCHER_SELECTED_ALPHA);
-                    cr.fill ();
-                }
                 draw_icon (cr, items[i].top, cx + cp, cy + cp, icon_size);
                 /* Punto bajo las apps con varias ventanas (como los indicadores de Dock-e) */
                 if (items[i].windows > 1) {
@@ -99,6 +179,8 @@ namespace Fenster {
                 }
             }
 
+            cr.pop_group_to_source ();
+            cr.paint_with_alpha (a);
             aw.paint (img);
         }
 

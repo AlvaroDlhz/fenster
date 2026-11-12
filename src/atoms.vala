@@ -48,6 +48,7 @@ namespace Fenster {
         public X.Atom wm_class;
         public X.Atom net_wm_icon;
         public X.Atom fenster_anim;
+        public X.Atom net_wm_window_opacity;
         public X.Atom wm_normal_hints;
         public X.Atom net_desktop_viewport;
         public X.Atom net_desktop_geometry;
@@ -107,6 +108,7 @@ namespace Fenster {
             wm_class = d.intern_atom ("WM_CLASS", false);
             net_wm_icon = d.intern_atom ("_NET_WM_ICON", false);
             fenster_anim = d.intern_atom ("_FENSTER_ANIM", false);
+            net_wm_window_opacity = d.intern_atom ("_NET_WM_WINDOW_OPACITY", false);
             wm_normal_hints = d.intern_atom ("WM_NORMAL_HINTS", false);
             net_desktop_viewport = d.intern_atom ("_NET_DESKTOP_VIEWPORT", false);
             net_desktop_geometry = d.intern_atom ("_NET_DESKTOP_GEOMETRY", false);

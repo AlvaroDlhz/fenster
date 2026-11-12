@@ -100,8 +100,10 @@ namespace Fenster {
 
         /* Mantiene la captura por encima de la ventana real mientras se pinta. */
         public void raise_above () {
-            aw.raise ();
-            aw.flush ();
+            if (!finished) {
+                aw.raise ();
+                aw.flush ();
+            }
         }
 
         /* Termina ya (p. ej. si la ventana desaparece o se repite la acción). */

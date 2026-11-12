@@ -70,10 +70,13 @@ namespace Fenster {
             dpy.move_resize_window (win, r.x, r.y, width, height);
         }
 
+        /* show/hide envían la orden al momento: a menudo se llaman desde
+         * temporizadores, fuera del bucle de eventos que vacía el búfer. */
         public void show () {
             if (!visible) {
                 Xv.map_raised (dpy, win);
                 visible = true;
+                dpy.flush ();
             }
         }
 
@@ -81,6 +84,7 @@ namespace Fenster {
             if (visible) {
                 dpy.unmap_window (win);
                 visible = false;
+                dpy.flush ();
             }
         }
 
@@ -96,6 +100,13 @@ namespace Fenster {
                 Xx.destroy_window (dpy, win);
                 win = 0;
             }
+        }
+
+        /* Publica un rectángulo en una propiedad (CARDINAL x, y, ancho, alto). */
+        public void set_rect_hint (string name, Rect r) {
+            long[] v = { r.x, r.y, r.w, r.h };
+            Xx.change_property (dpy, win, dpy.intern_atom (name, false), (X.Atom) Xc.XA_CARDINAL, 32,
+                                Xc.PROP_MODE_REPLACE, (void*) v, 4);
         }
 
         public void raise () {

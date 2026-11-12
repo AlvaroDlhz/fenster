@@ -187,6 +187,8 @@ namespace Fenster {
         public Rect mini_rect;
         public MinimizeAnimation? anim = null;
         public ulong paint_damage = 0;   /* DAMAGE: esperando a que se pinte */
+        public MorphAnimation? morph = null;   /* transición de geometría en curso */
+        public long[] saved_opacity = {};      /* _NET_WM_WINDOW_OPACITY original */
 
         /* Prevención de robo de foco (_NET_WM_USER_TIME) */
         public X.Window user_time_win = 0;

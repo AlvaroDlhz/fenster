@@ -113,6 +113,14 @@ Curva: *ease-out*, sin rebotes (salvo avisos urgentes).
       oculto el destino no se ve.)
 - [x] Reglas por aplicación en `~/.config/fenster/fenster.conf` (escritorio,
       monitor, tamaño, posición, estado, encima, Alt+Tab, foco); se recarga sola
+- [x] Transiciones de geometría (maximizar, mitades, cuartos, restaurar,
+      cambiar de monitor): la captura se transforma en 200 ms mientras la
+      ventana real, invisible, se redibuja; fundido cruzado de 90 ms al final
+- [x] Alt+Tab animado: aparece creciendo del 97 % con fundido (120 ms) y la
+      pastilla de selección se desliza (90 ms)
+- [x] Vista previa del ajuste animada: crece desde la ventana, se transforma
+      entre zonas (150 ms) y se desvanece al salir (100 ms)
+- [ ] Abrir ventanas con escala (95 % → 100 %) animado por Fenster o picom v12
 - [x] Redimensionado enlazado: las ventanas pegadas comparten el borde al
       cambiar de tamaño (vecinas y hermanas alineadas, respetando mínimos)
 - [ ] Vista general de ventanas (tipo Mission Control)

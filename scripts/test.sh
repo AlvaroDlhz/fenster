@@ -144,6 +144,9 @@ check "Arrastrar una ventana ajustada recupera su tamaño" "484x316" "$(geo "$B"
 
 echo "== Vista previa del ajuste y cuartos"
 preview_win() { xwininfo -root -tree | awk '/"fenster-snap-preview"/{print $1; exit}'; }
+prect() {  # rectángulo de destino que dibuja la vista previa
+    xprop -id "$1" _FENSTER_PREVIEW_RECT | cut -d= -f2 | tr -d ' ' | awk -F, '{print $1","$2" "$3"x"$4}'
+}
 mapstate() {  # sin id, xwininfo esperaría un clic: devolver algo y seguir
     [ -n "$1" ] || { echo "(sin ventana)"; return; }
     xwininfo -id "$1" | awk '/Map State/{print $NF}'
@@ -163,10 +166,10 @@ PV=$(preview_win)
 check "arrastrar al borde muestra la vista previa" "IsViewable" "$(mapstate "$PV")"
 check "con WM_CLASS completo para las reglas de picom" 'WM_CLASS(STRING) = "fenster-snap-preview", "Fenster"' "$(xprop -id "$PV" WM_CLASS)"
 # mitad izquierda del monitor izquierdo (área 1280x760 por el dock) con margen de 8
-check "con la geometría de la mitad izquierda" "8,8 624x744" "$(geo "$PV")"
+check "con el rectángulo de la mitad izquierda" "8,8 624x744" "$(prect "$PV")"
 check "justo debajo de la ventana arrastrada" "1" "$(just_below "$PV" "$B")"
 $FI move 0 750
-check "en la esquina la vista previa pasa a un cuarto" "8,388 624x364" "$(geo "$PV")"
+check "en la esquina la vista previa pasa a un cuarto" "8,388 624x364" "$(prect "$PV")"
 $FI move 400 400
 check "lejos de los bordes desaparece" "IsUnMapped" "$(mapstate "$PV")"
 $FI move 0 750
@@ -186,6 +189,17 @@ $FI key super+Right; $FI key super+Down; sleep 0.2
 check "Super+→ y Super+↓ → cuarto inferior derecho" "640,380 640x380" "$(geo "$B")"
 $FI key super+Down; sleep 0.2
 check "Super+↓ desde el cuarto inferior restaura" "484x316" "$(geo "$B" | cut -d' ' -f2)"
+morph_win() { xwininfo -root -tree | awk '/"fenster-morph"/{print $1; exit}'; }
+sleep 0.6
+FI_SLEEP=0 $FI key super+Left; sleep 0.05
+check "las transiciones de geometría se animan" "IsViewable" "$(mapstate "$(morph_win)")"
+check "con la ventana real invisible mientras se redibuja" "0" \
+    "$(xprop -id "$B" _NET_WM_WINDOW_OPACITY | awk -F'= ' '{print $2}')"
+sleep 0.6
+check "al terminar la capa se retira" "" "$(morph_win)"
+check "y la ventana recupera su opacidad" "0" "$(xprop -id "$B" _NET_WM_WINDOW_OPACITY | grep -c '=')"
+check "con la geometría final correcta" "0,0 640x760" "$(geo "$B")"
+$FI key super+Down; sleep 0.5; $FI key super+Down; sleep 0.6   # mitad → cuarto → restaurada
 
 echo "== Quitar el dock libera el área"
 xprop -id "$A" -remove _NET_WM_STRUT_PARTIAL; sleep 0.3
@@ -293,6 +307,15 @@ wmctrl -i -a "$A"; sleep 0.3
 wmctrl -i -r "$A" -b add,hidden; sleep 0.1
 AW=$(anim_win)
 check "minimizar muestra la animación" "IsViewable" "$(mapstate "$AW")"
+above_all() {  # ¿$1 está por encima de todas las ventanas gestionadas?
+    local clients w; clients=" $(wmctrl -l | awk '{printf "%s ", $1}') "
+    for w in $(xwininfo -root -children | grep -o '^ *0x[0-9a-f]*'); do
+        [ "$(norm "$w")" = "$(norm "$1")" ] && { echo 1; return; }
+        for c in $clients; do [ "$(norm "$c")" = "$(norm "$w")" ] && { echo 0; return; }; done
+    done
+    echo 0
+}
+check "y queda por encima de todo aunque se enfoque otra ventana" "1" "$(above_all "$AW")"
 check "y la ventana real ya está oculta" "IsUnMapped" "$(mapstate "$A")"
 read -r ax ay aw ah <<<"$(geo "$AW" | tr ',x' '  ')"
 check "la animación ocupa la ventana más su descenso de 16 px" "$(geo "$A" | awk '{split($2,s,"x"); print s[1]"x"s[2]+16}')" "${aw}x${ah}"

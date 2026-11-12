@@ -136,6 +136,7 @@ src/switcher.vala        panel del Alt+Tab
 src/snap.vala            zonas de ajuste (mitades, cuartos) y su vista previa
 src/linked-resize.vala   redimensionado enlazado de ventanas pegadas
 src/minimize.vala        animación de minimizar/restaurar en el sitio
+src/morph.vala           transición animada al maximizar, ajustar o cambiar de monitor
 src/config.vala          configuración y reglas por aplicación
 src/icons.vala           iconos: _NET_WM_ICON, .desktop y tema (sin GTK)
 src/style.vala           tokens visuales y de movimiento (de Dock-e)
