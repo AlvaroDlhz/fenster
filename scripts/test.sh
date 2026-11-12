@@ -28,6 +28,8 @@ CONF="${TMPDIR:-/tmp}/fenster-test.conf"
 cat >"$CONF" <<'CONFEOF'
 [General]
 escritorios = 4
+# las barras de título se prueban aparte, al final
+barras-de-titulo = false
 
 [Regla centrada en el monitor 2]
 titulo = ^prueba-plain-regla$
@@ -191,13 +193,14 @@ $FI key super+Down; sleep 0.2
 check "Super+↓ desde el cuarto inferior restaura" "484x316" "$(geo "$B" | cut -d' ' -f2)"
 morph_win() { xwininfo -root -tree | awk '/"fenster-morph"/{print $1; exit}'; }
 sleep 0.6
-FI_SLEEP=0 $FI key super+Left; sleep 0.05
+FI_SLEEP=0 $FI key super+Left; sleep 0.03
+real_state=$(mapstate "$B")   # primero la ventana: la transición dura ~200 ms
 check "las transiciones de geometría se animan" "IsViewable" "$(mapstate "$(morph_win)")"
-check "con la ventana real invisible mientras se redibuja" "0" \
-    "$(xprop -id "$B" _NET_WM_WINDOW_OPACITY | awk -F'= ' '{print $2}')"
+check "con la ventana real oculta mientras se redibuja" "IsUnMapped" "$real_state"
 sleep 0.6
 check "al terminar la capa se retira" "" "$(morph_win)"
-check "y la ventana recupera su opacidad" "0" "$(xprop -id "$B" _NET_WM_WINDOW_OPACITY | grep -c '=')"
+check "y la ventana real vuelve a verse" "IsViewable" "$(mapstate "$B")"
+check "conservando el foco" "$(norm "$B")" "$(norm "$(active)")"
 check "con la geometría final correcta" "0,0 640x760" "$(geo "$B")"
 $FI key super+Down; sleep 0.5; $FI key super+Down; sleep 0.6   # mitad → cuarto → restaurada
 
@@ -205,6 +208,11 @@ echo "== Quitar el dock libera el área"
 xprop -id "$A" -remove _NET_WM_STRUT_PARTIAL; sleep 0.3
 wmctrl -i -a "$B"; sleep 0.2; $FI key super+Up; sleep 0.2
 check "Maximizar ocupa todo el monitor izquierdo" "0,0 1280x800" "$(geo "$B")"
+# Apps CSD (Tilix): cambian sus márgenes invisibles al maximizarse
+xprop -id "$B" -f _GTK_FRAME_EXTENTS 32c -set _GTK_FRAME_EXTENTS "26, 26, 23, 29"; sleep 0.3
+check "si la app publica márgenes CSD, quedan fuera de la pantalla" "-26,-23 1332x852" "$(geo "$B")"
+xprop -id "$B" -f _GTK_FRAME_EXTENTS 32c -set _GTK_FRAME_EXTENTS "0, 0, 0, 0"; sleep 0.3
+check "y si los quita al maximizarse, la ventana vuelve al área útil (sin zoom)" "0,0 1280x800" "$(geo "$B")"
 
 echo "== Escritorios virtuales"
 mapped() { mapstate "$1"; }
@@ -383,6 +391,81 @@ rdrag 600 700 3000 700
 check "nadie baja de su tamaño mínimo (64 px)" "1216 64 64" \
     "$(geo "$P" | awk '{split($2,a,"x"); print a[1]}') $(geo "$Q" | awk '{split($2,a,"x"); print a[1]}') $(geo "$R" | awk '{split($2,a,"x"); print a[1]}')"
 wmctrl -i -c "$P"; wmctrl -i -c "$Q"; wmctrl -i -c "$R"; sleep 0.3; wmctrl -s 0
+
+echo "== Bordes invisibles para redimensionar (todas las apps)"
+wmctrl -s 3; sleep 0.3; $FI move 300 300
+xterm & sleep 0.8; H=$(newest)
+read -r hx hy hw hh <<<"$(geo "$H" | tr ',x' '  ')"
+handles=$(xwininfo -root -tree | awk '/1x1\+-100\+-100|has no name/' | wc -l)
+$FI move $((hx + hw + 3)) $((hy + hh / 2)); $FI down 1; $FI move $((hx + hw + 60)) $((hy + hh / 2)); $FI move $((hx + hw + 103)) $((hy + hh / 2)); $FI up 1; sleep 0.3
+nw=$(geo "$H" | awk '{split($2,a,"x"); print a[1]}')
+check "arrastrar el borde derecho (fuera de la ventana) la ensancha" "1" "$([ "$nw" -gt "$((hw + 80))" ] && echo 1 || echo 0)"
+check "sin moverla" "$hx,$hy" "$(geo "$H" | cut -d' ' -f1)"
+read -r hx hy hw hh <<<"$(geo "$H" | tr ',x' '  ')"
+$FI move $((hx + hw + 3)) $((hy + hh + 3)); $FI down 1; $FI move $((hx + hw + 40)) $((hy + hh + 40)); $FI move $((hx + hw + 80)) $((hy + hh + 80)); $FI up 1; sleep 0.3
+read -r _ _ w2 h2 <<<"$(geo "$H" | tr ',x' '  ')"
+check "la esquina redimensiona en diagonal" "1 1" "$([ "$w2" -gt "$((hw + 50))" ] && echo 1 || echo 0) $([ "$h2" -gt "$((hh + 50))" ] && echo 1 || echo 0)"
+read -r hx hy hw hh <<<"$(geo "$H" | tr ',x' '  ')"
+$FI move $((hx - 3)) $((hy + hh / 2)); $FI down 1; $FI move $((hx - 40)) $((hy + hh / 2)); $FI move $((hx - 63)) $((hy + hh / 2)); $FI up 1; sleep 0.3
+read -r x3 _ w3 _ <<<"$(geo "$H" | tr ',x' '  ')"
+check "el borde izquierdo también (mueve el lado izquierdo)" "1 1" "$([ "$x3" -lt "$((hx - 40))" ] && echo 1 || echo 0) $([ "$w3" -gt "$((hw + 40))" ] && echo 1 || echo 0)"
+wmctrl -i -a "$H"; $FI key super+Up; sleep 0.6
+read -r hx hy hw hh <<<"$(geo "$H" | tr ',x' '  ')"
+before=$(geo "$H")
+$FI move 600 798; $FI down 1; $FI move 600 700; $FI up 1; sleep 0.3
+check "maximizada no tiene bordes (no se redimensiona por accidente)" "$before" "$(geo "$H")"
+wmctrl -i -c "$H"; sleep 0.3; wmctrl -s 0; sleep 0.3
+
+echo "== Barra de título propia (apps sin decoración)"
+cat >"$CONF" <<'CONFEOF'
+[General]
+barras-de-titulo = true
+CONFEOF
+sleep 1
+wmctrl -s 3; sleep 0.3; $FI move 300 300
+xterm & sleep 0.8; T=$(newest)
+BAR=$(xwininfo -root -tree | awk '/"fenster-titlebar"/{print $1}' | tail -1)
+read -r tx ty tw th <<<"$(geo "$T" | tr ',x' '  ')"
+check "una app sin decoración recibe la barra de Fenster" "IsViewable" "$(mapstate "$BAR")"
+check "justo encima de la ventana, 28 px" "$tx,$((ty - 28)) ${tw}x28" "$(geo "$BAR")"
+check "y anuncia el margen a la app (_NET_FRAME_EXTENTS)" "0,0,28,0" "$(xprop -id "$T" _NET_FRAME_EXTENTS | cut -d= -f2 | tr -d ' ')"
+check "la barra está justo encima en el apilado" "1" "$(just_below "$T" "$BAR")"
+check "marcada para que picom no la redondee dos veces" "1" "$(xprop -id "$T" _FENSTER_DECORATED | awk '{print $NF}')"
+check "con las esquinas inferiores recortadas (SHAPE, 12 px)" "1" "$(xwininfo -shape -id "$T" | grep -c 'Window shape extents')"
+$FI key super+Left; sleep 0.6
+check "ajustar a la mitad cuenta la barra" "0,28 640x772" "$(geo "$T")"
+check "y la barra la acompaña" "0,0 640x28" "$(geo "$BAR")"
+$FI key super+Down; sleep 0.5; $FI key super+Down; sleep 0.6
+read -r bx by _ _ <<<"$(geo "$BAR" | tr ',x' '  ')"
+$FI move $((bx + 200)) $((by + 14)); $FI down 1; $FI move $((bx + 260)) $((by + 64)); $FI move $((bx + 300)) $((by + 114)); $FI up 1; sleep 0.2
+check "arrastrar la barra mueve la ventana" "$((bx + 100)),$((by + 100 + 28))" "$(geo "$T" | cut -d' ' -f1)"
+read -r bx by _ _ <<<"$(geo "$BAR" | tr ',x' '  ')"
+FI_SLEEP=0.05 $FI move $((bx + 200)) $((by + 14))
+FI_SLEEP=0.02 $FI down 1; FI_SLEEP=0.05 $FI up 1; FI_SLEEP=0.02 $FI down 1; FI_SLEEP=0.6 $FI up 1
+check "doble clic en la barra maximiza" "1" "$(state "$T" | grep -c MAXIMIZED_VERT)"
+read -r bx by bw _ <<<"$(geo "$BAR" | tr ',x' '  ')"
+$FI move $((bx + bw - 36)) $((by + 14)); $FI down 1; $FI up 1; sleep 0.6
+check "el botón + alterna maximizar" "0" "$(state "$T" | grep -c MAXIMIZED_VERT)"
+read -r bx by bw _ <<<"$(geo "$BAR" | tr ',x' '  ')"
+$FI move $((bx + bw - 56)) $((by + 14)); $FI down 1; $FI up 1; sleep 0.6
+check "el botón – minimiza" "1" "$(state "$T" | grep -c HIDDEN)"
+check "y la barra se oculta con la ventana" "IsUnMapped" "$(mapstate "$BAR")"
+wmctrl -i -a "$T"; sleep 0.8
+check "al restaurar vuelve la barra" "IsViewable" "$(mapstate "$BAR")"
+read -r vx vy _ _ <<<"$(geo "$BAR" | tr ',x' '  ')"   # esquina visible (barra)
+wmctrl -i -r "$T" -e 0,100,-200,-1,-1; sleep 0.3   # la app pide subir por encima de la pantalla
+check "la barra nunca queda fuera del área útil" "100,28" "$(geo "$T" | cut -d' ' -f1)"
+read -r vx vy _ _ <<<"$(geo "$BAR" | tr ',x' '  ')"
+xprop -id "$T" -f _MOTIF_WM_HINTS 32c -set _MOTIF_WM_HINTS "2, 0, 0, 0, 0"; sleep 0.3
+check "si la app pasa a dibujar su barra, Fenster quita la suya" "(sin ventana)" \
+    "$(mapstate "$(xwininfo -root -tree | awk '/"fenster-titlebar"/{print $1}' | tail -1)")"
+check "conservando el mismo rectángulo visible" "$vx,$vy" "$(geo "$T" | cut -d' ' -f1)"
+xprop -id "$T" -f _MOTIF_WM_HINTS 32c -set _MOTIF_WM_HINTS "2, 0, 1, 0, 0"; sleep 0.3
+BAR=$(xwininfo -root -tree | awk '/"fenster-titlebar"/{print $1}' | tail -1)
+read -r bx by bw _ <<<"$(geo "$BAR" | tr ',x' '  ')"
+$FI move $((bx + bw - 16)) $((by + 14)); $FI down 1; $FI up 1; sleep 0.5
+check "el botón ✕ cierra la ventana" "0" "$(wmctrl -l | grep -ci "${T#0x}")"
+wmctrl -s 0; sleep 0.3
 
 echo
 echo "Resultado: $PASS correctas, $FAIL fallidas   (registro: $LOG)"

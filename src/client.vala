@@ -188,7 +188,22 @@ namespace Fenster {
         public MinimizeAnimation? anim = null;
         public ulong paint_damage = 0;   /* DAMAGE: esperando a que se pinte */
         public MorphAnimation? morph = null;   /* transición de geometría en curso */
-        public long[] saved_opacity = {};      /* _NET_WM_WINDOW_OPACITY original */
+        public bool morph_hidden = false;      /* oculta por una transición en curso */
+
+        /* Barra de título de Fenster (apps sin decoración propia) */
+        public TitleBar? bar = null;
+        public ResizeHandles? handles = null;  /* bordes invisibles para redimensionar */
+        public bool shaped = false;            /* esquinas inferiores recortadas */
+        public int shape_w = 0;
+        public int shape_h = 0;
+
+        /* Radio de esquina visible: 0 si toca los bordes de la pantalla */
+        public int corner_radius () {
+            return maximized || fullscreen ? 0 : Style.CORNER_RADIUS;
+        }
+        public int deco_top = 0;               /* alto de la barra, 0 si no lleva */
+        public string title = "";
+        public bool restoring = false;         /* animación de restaurar en curso */
 
         /* Prevención de robo de foco (_NET_WM_USER_TIME) */
         public X.Window user_time_win = 0;

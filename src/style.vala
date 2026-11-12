@@ -50,6 +50,13 @@ namespace Fenster.Style {
     public const int SNAP_PREVIEW_MS = 150;       /* aparecer / cambiar de zona */
     public const int SNAP_PREVIEW_FADE_MS = 100;  /* desaparecer */
 
+    /* Barra de título propia (apps sin decoración) */
+    public const int TITLEBAR_HEIGHT = 28;
+    public const double TITLEBAR_DOT_R = 6;
+    public const int TITLEBAR_DOT_X = 16;       /* centro del primer punto */
+    public const int TITLEBAR_DOT_GAP = 20;     /* entre centros */
+    public const int TITLEBAR_DOUBLE_CLICK_MS = 400;
+
     /* Separación entre ventanas al ajustarlas a mitades/cuartos (px) */
     public const int SNAP_GAP = 0;
 }

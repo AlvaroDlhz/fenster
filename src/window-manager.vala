@@ -54,6 +54,8 @@ namespace Fenster {
         int cycle_index = 0;
         uint sw_timer = 0;
         Switcher switcher;
+        ulong[] resize_cursors = new ulong[8];   /* por dirección EWMH */
+        unowned X.Visual? root_visual = null;
         SnapPreview preview;
         SnapZone drag_zone = SnapZone.NONE;
         Monitor? drag_zone_mon = null;
@@ -131,6 +133,14 @@ namespace Fenster {
             var prev_active = get_longs (root, atoms.net_active_window, Xc.XA_WINDOW, 1);
             setup_ewmh ();
             switcher = new Switcher (dpy, root, screen, atoms);
+            X.WindowAttributes ra;
+            dpy.get_window_attributes (root, out ra);
+            root_visual = ra.visual;
+            /* cursorfont: esquinas y lados, en el orden de las direcciones EWMH */
+            uint[] shapes = { 134, 138, 136, 96, 14, 16, 12, 70 };
+            for (int i = 0; i < 8; i++) {
+                resize_cursors[i] = Xx.create_font_cursor (dpy, shapes[i]);
+            }
             preview = new SnapPreview (dpy, root, screen, atoms);
             grab_keys ();
             scan_existing ();
@@ -191,21 +201,32 @@ namespace Fenster {
             X.Window r, p;
             X.Window[] children;
             dpy.query_tree (root, out r, out p, out children);
-            foreach (var w in children) {
-                if (w == check_win) {
-                    continue;
+            /* Dos pasadas: primero panel y docks (sus struts definen el área útil),
+             * luego el resto, para colocarlas ya sabiendo dónde está el panel. */
+            for (int pass = 0; pass < 2; pass++) {
+                foreach (var w in children) {
+                    if (w == check_win) {
+                        continue;
+                    }
+                    X.WindowAttributes a;
+                    last_error = 0;
+                    dpy.get_window_attributes (w, out a);
+                    if (last_error != 0 || a.override_redirect) {
+                        continue;
+                    }
+                    bool chrome = read_kind (w).is_chrome ();
+                    if ((pass == 0) != chrome) {
+                        continue;
+                    }
+                    var st = get_longs (w, atoms.wm_state, atoms.wm_state, 2);
+                    bool iconic = st.length > 0 && st[0] == Xc.ICONIC_STATE;
+                    bool had_state = st.length > 0 && st[0] != Xc.WITHDRAWN_STATE;
+                    if (a.map_state == 2 /* IsViewable */ || had_state) {
+                        manage (w, iconic, true);
+                    }
                 }
-                X.WindowAttributes a;
-                last_error = 0;
-                dpy.get_window_attributes (w, out a);
-                if (last_error != 0 || a.override_redirect) {
-                    continue;
-                }
-                var st = get_longs (w, atoms.wm_state, atoms.wm_state, 2);
-                bool iconic = st.length > 0 && st[0] == Xc.ICONIC_STATE;
-                bool had_state = st.length > 0 && st[0] != Xc.WITHDRAWN_STATE;
-                if (a.map_state == 2 /* IsViewable */ || had_state) {
-                    manage (w, iconic, true);
+                if (pass == 0) {
+                    update_workarea ();
                 }
             }
         }
@@ -279,10 +300,33 @@ namespace Fenster {
                 on_button_press (ref ev.xbutton);
                 break;
             case Xc.MOTION_NOTIFY:
+                if (drag == DragMode.NONE) {
+                    var bc = find_by_bar (ev.xmotion.window);
+                    if (bc != null) {
+                        on_bar_motion (bc, ev.xmotion.x, ev.xmotion.y);
+                    } else {
+                        int edge;
+                        var hc = find_by_handle (ev.xmotion.window, out edge);
+                        if (hc != null) hc.handles.hover (edge, ev.xmotion.x, ev.xmotion.y);
+                    }
+                    break;
+                }
                 on_motion (ev.xmotion.x_root, ev.xmotion.y_root);
                 break;
             case Xc.BUTTON_RELEASE:
+                if (drag == DragMode.NONE) {
+                    var bc = find_by_bar (ev.xbutton.window);
+                    if (bc != null) on_bar_release (bc, ev.xbutton.x, ev.xbutton.y);
+                    break;
+                }
                 on_button_release (ev.xbutton.x_root, ev.xbutton.y_root);
+                break;
+            case 8: /* LeaveNotify */
+                var lc = find_by_bar (ev.xcrossing.window);
+                if (lc != null && lc.bar.hover != TitleButton.NONE) {
+                    lc.bar.hover = TitleButton.NONE;
+                    lc.bar.draw ();
+                }
                 break;
             case Xc.KEY_PRESS:
                 on_key_press (ref ev.xkey);
@@ -301,7 +345,10 @@ namespace Fenster {
                 loop.quit ();
                 break;
             case 12: /* Expose */
-                if (switcher != null && ev.xany.window == switcher.window) {
+                var ec = find_by_bar (ev.xany.window);
+                if (ec != null) {
+                    ec.bar.draw ();
+                } else if (switcher != null && ev.xany.window == switcher.window) {
                     switcher.draw ();
                 } else if (preview != null && ev.xany.window == preview.window) {
                     preview.draw ();
@@ -328,6 +375,7 @@ namespace Fenster {
                 if ((e.value_mask & Xc.CW_WIDTH) != 0) g.w = e.width;
                 if ((e.value_mask & Xc.CW_HEIGHT) != 0) g.h = e.height;
                 c.hints.constrain (ref g.w, ref g.h, false);
+                g = keep_bar_reachable (c, g);
                 apply_geometry (c, g);
                 return;
             }
@@ -377,7 +425,22 @@ namespace Fenster {
                 read_struts (c);
                 update_workarea ();
             } else if (a == atoms.gtk_frame_extents) {
+                long[] before = { c.csd[0], c.csd[1], c.csd[2], c.csd[3] };
                 read_csd (c);
+                bool changed = false;
+                for (int i = 0; i < 4; i++) {
+                    if (before[i] != c.csd[i]) changed = true;
+                }
+                /* Las apps CSD (Tilix, GTK) quitan sus márgenes invisibles al
+                 * saberse maximizadas/ajustadas: hay que recalcular la geometría
+                 * o su contenido queda más grande que la pantalla ("zoom"). */
+                if (changed && (c.maximized || c.snapped || c.fullscreen)) {
+                    debug ("márgenes CSD de %s cambian: reajustando", c.wm_class);
+                    reapply_client (c);
+                }
+                if (changed) {
+                    update_decoration (c);  /* con CSD no lleva barra de Fenster */
+                }
             } else if (a == atoms.wm_normal_hints) {
                 c.hints = SizeHints.parse (get_longs (w, atoms.wm_normal_hints, (X.Atom) 41, 18));
             } else if (a == atoms.wm_hints) {
@@ -388,6 +451,14 @@ namespace Fenster {
                 }
             } else if (a == atoms.net_wm_user_time) {
                 read_user_time (c);
+            } else if (a == atoms.net_wm_name || a == (X.Atom) 39 /* WM_NAME */) {
+                c.title = read_title (c.win);
+                if (c.bar != null) {
+                    c.bar.title = c.title;
+                    c.bar.draw ();
+                }
+            } else if (a == atoms.motif_wm_hints) {
+                update_decoration (c);
             } else if (a == atoms.net_wm_icon) {
                 c.icon_loaded = false;
                 c.icon = null;
@@ -398,7 +469,8 @@ namespace Fenster {
             var type = e.message_type;
 
             if (type == atoms.net_request_frame_extents) {
-                set_prop (e.window, atoms.net_frame_extents, Xc.XA_CARDINAL, { 0, 0, 0, 0 });
+                long top = config.titlebars && !motif_no_decorations (e.window) ? Style.TITLEBAR_HEIGHT : 0;
+                set_prop (e.window, atoms.net_frame_extents, Xc.XA_CARDINAL, { 0, 0, top, 0 });
                 return;
             }
 
@@ -426,6 +498,24 @@ namespace Fenster {
                 } else {
                     activate (c);
                 }
+            } else if (type == atoms.net_moveresize_window) {
+                /* l[0]: bits 8-11 = x, y, ancho, alto presentes; l[1..4] = valores */
+                if (c.kind.is_chrome () || c.fullscreen) {
+                    return;
+                }
+                long f = e.l[0];
+                var g = c.geom;
+                if ((f & (1 << 8)) != 0) g.x = (int) e.l[1];
+                if ((f & (1 << 9)) != 0) g.y = (int) e.l[2];
+                if ((f & (1 << 10)) != 0) g.w = (int) e.l[3];
+                if ((f & (1 << 11)) != 0) g.h = (int) e.l[4];
+                c.hints.constrain (ref g.w, ref g.h, false);
+                if (c.maximized || c.snapped) {
+                    c.maximized = false;
+                    c.snapped = false;
+                    update_net_wm_state (c);
+                }
+                apply_geometry (c, keep_bar_reachable (c, g));
             } else if (type == atoms.net_wm_desktop) {
                 move_to_desktop (c, (uint) e.l[0], false);
             } else if (type == atoms.net_close_window) {
@@ -523,6 +613,16 @@ namespace Fenster {
             read_csd (c);
             c.hints = SizeHints.parse (get_longs (w, atoms.wm_normal_hints, (X.Atom) 41, 18));
             read_wm_class (c);
+            c.title = read_title (w);
+            if (config.titlebars && wants_decoration (c)) {
+                c.deco_top = Style.TITLEBAR_HEIGHT;
+                c.bar = new TitleBar (dpy, root, screen, atoms);
+                c.bar.title = c.title;
+                set_prop (w, atoms.fenster_decorated, Xc.XA_CARDINAL, { 1 });
+            }
+            if (wants_handles (c)) {
+                c.handles = new ResizeHandles (dpy, root, root_visual, resize_cursors);
+            }
             Rule? rule = c.kind.is_chrome () ? null : config.match (c.wm_instance, c.wm_class, read_title (w));
             if (rule != null) {
                 debug ("regla «%s» para %s", rule.name, c.wm_class);
@@ -593,8 +693,9 @@ namespace Fenster {
             dpy.configure_window (w, (uint) Xc.CW_BORDER_WIDTH, wc);
             if (!c.kind.is_chrome ()) {
                 dpy.move_resize_window (w, c.geom.x, c.geom.y, c.geom.w, c.geom.h);
+                if (c.bar != null) c.bar.place (c.geom);
             }
-            set_prop (w, atoms.net_frame_extents, Xc.XA_CARDINAL, { 0, 0, 0, 0 });
+            set_prop (w, atoms.net_frame_extents, Xc.XA_CARDINAL, { 0, 0, c.deco_top, 0 });
             set_prop (w, atoms.net_wm_desktop, Xc.XA_CARDINAL, { (long) c.desktop });
 
             clients.add (c);
@@ -633,6 +734,7 @@ namespace Fenster {
                 }
             }
             update_net_wm_state (c);
+            sync_bar (c);
 
             if (c.kind == ClientKind.DOCK) {
                 update_workarea ();
@@ -689,6 +791,14 @@ namespace Fenster {
                 c.morph.finish ();
                 c.morph = null;
             }
+            if (c.bar != null) {
+                c.bar.destroy ();
+                c.bar = null;
+            }
+            if (c.handles != null) {
+                c.handles.destroy ();
+                c.handles = null;
+            }
             if (c.paint_damage != 0 && !destroyed) {
                 Xd.destroy (dpy, c.paint_damage);
             }
@@ -723,20 +833,21 @@ namespace Fenster {
                         : unplaced ? pointer_monitor ()
                         : monitors.for_rect (g);
             var wa = mon.work;
+            int bar = c.deco_top;
             g.w = int.min (g.w, wa.w);
-            g.h = int.min (g.h, wa.h);
+            g.h = int.min (g.h, wa.h - bar);
 
             if (parent != null) {
                 /* Diálogos centrados sobre su ventana madre */
                 g.x = parent.geom.x + (parent.geom.w - g.w) / 2;
-                g.y = parent.geom.y + (parent.geom.h - g.h) / 2;
+                g.y = parent.geom.y + (parent.geom.h - g.h - bar) / 2 + bar;
             } else if (unplaced) {
                 g.x = wa.x + (wa.w - g.w) / 2;
-                g.y = wa.y + (wa.h - g.h) / 2;
+                g.y = wa.y + (wa.h - g.h - bar) / 2 + bar;
             }
-            /* Que la ventana quede siempre dentro del área útil */
+            /* Que la ventana (con su barra) quede siempre dentro del área útil */
             g.x = int.max (wa.x - (int) c.csd[0], int.min (g.x, wa.x + wa.w - g.w + (int) c.csd[1]));
-            g.y = int.max (wa.y - (int) c.csd[2], int.min (g.y, wa.y + wa.h - g.h + (int) c.csd[3]));
+            g.y = int.max (wa.y - (int) c.csd[2] + bar, int.min (g.y, wa.y + wa.h - g.h + (int) c.csd[3]));
             return g;
         }
 
@@ -756,21 +867,21 @@ namespace Fenster {
             var wa = target.work;
             var g = c.geom;
             int w, h;
+            int bar = c.deco_top;
             if (rule.parse_size (wa, out w, out h)) {
                 c.hints.constrain (ref w, ref h, false);
                 g.w = int.min (w, wa.w);
-                g.h = int.min (h, wa.h);
+                g.h = int.min (h, wa.h - bar);
             }
             int px, py;
             if (rule.parse_position (out px, out py)) {
                 g.x = wa.x + px;
-                g.y = wa.y + py;
+                g.y = wa.y + py + bar;
             } else if (rule.centered () || mon != null || rule.size != null) {
                 g.x = wa.x + (wa.w - g.w) / 2;
-                g.y = wa.y + (wa.h - g.h) / 2;
+                g.y = wa.y + (wa.h - g.h - bar) / 2 + bar;
             }
-            c.geom = g;
-            dpy.move_resize_window (c.win, g.x, g.y, g.w, g.h);
+            apply_geometry (c, g);
             return target;
         }
 
@@ -779,6 +890,13 @@ namespace Fenster {
             g.h = int.max (g.h, 1);
             c.geom = g;
             dpy.move_resize_window (c.win, g.x, g.y, g.w, g.h);
+            if (c.bar != null) {
+                c.bar.place (g);
+            }
+            if (c.handles != null) {
+                c.handles.place (LinkedResize.visible (c, g));
+            }
+            shape_client (c);
         }
 
         /* Convierte un rectángulo visible en la geometría X de la ventana,
@@ -791,10 +909,17 @@ namespace Fenster {
             return Rect (r.x + (r.w - w) / 2, r.y + (r.h - h) / 2, w, h);
         }
 
+        /* Rectángulo visible → geometría X de la ventana: suma los márgenes CSD
+         * y deja sitio arriba para la barra de Fenster si la lleva. */
         Rect with_csd (Client c, Rect r) {
-            return Rect (r.x - (int) c.csd[0], r.y - (int) c.csd[2],
+            return Rect (r.x - (int) c.csd[0], r.y - (int) c.csd[2] + c.deco_top,
                          r.w + (int) (c.csd[0] + c.csd[1]),
-                         r.h + (int) (c.csd[2] + c.csd[3]));
+                         r.h + (int) (c.csd[2] + c.csd[3]) - c.deco_top);
+        }
+
+        /* Geometría de la ventana más su barra (lo que se ve en pantalla). */
+        Rect outer (Client c, Rect g) {
+            return Rect (g.x, g.y - c.deco_top, g.w, g.h + c.deco_top);
         }
 
         /* ---------------------------------------------------------------- */
@@ -815,6 +940,7 @@ namespace Fenster {
                 dpy.set_input_focus (root, Xc.REVERT_TO_POINTER_ROOT, Xc.CURRENT_TIME);
                 set_prop (root, atoms.net_active_window, Xc.XA_WINDOW, { 0 });
                 if (prev != null) grab_buttons (prev, false);
+                refresh_bar (prev);
                 return;
             }
             focused = c;
@@ -836,6 +962,8 @@ namespace Fenster {
                 mru.remove (c);
                 mru.insert (0, c);
             }
+            refresh_bar (prev);
+            refresh_bar (c);
         }
 
         void focus_next () {
@@ -896,7 +1024,11 @@ namespace Fenster {
             foreach (var l in layers) {
                 stacking.foreach ((c) => { if (c.layer (c == focused) == l) order.add (c); });
             }
-            order.foreach ((c) => { dpy.raise_window (c.win); });
+            order.foreach ((c) => {
+                dpy.raise_window (c.win);
+                if (c.bar != null && c.bar.visible) c.bar.raise ();
+                if (c.handles != null && c.handles.visible) c.handles.raise ();
+            });
             stacking = order;
             keep_overlays_on_top ();
         }
@@ -951,6 +1083,7 @@ namespace Fenster {
             if (c.anim != null) {
                 c.anim.finish ();
             }
+            finish_morph (c);
             /* Captura antes de ocultar, para la animación en el sitio */
             Rect shot_rect = c.geom;
             var shot = c.hidden_by_desktop ? null : snapshot (c, out shot_rect);
@@ -969,6 +1102,7 @@ namespace Fenster {
                     if (still != null) {
                         if (still.minimized) {
                             dpy.unmap_window (still.win);
+                            sync_bar (still);
                         } else {
                             still.ignore_unmaps--;  /* se restauró antes de ocultarse */
                         }
@@ -978,6 +1112,7 @@ namespace Fenster {
                 });
             } else {
                 dpy.unmap_window (c.win);
+                sync_bar (c);
             }
             set_wm_state (c, Xc.ICONIC_STATE);
             update_net_wm_state (c);
@@ -998,14 +1133,19 @@ namespace Fenster {
             update_net_wm_state (c);
             if (c.mini_snapshot != null && !c.hidden_by_desktop) {
                 var win = c.win;
+                c.restoring = true;
                 start_minimize_anim (c, true, () => {
                     var still = find (win);
+                    if (still != null) {
+                        still.restoring = false;
+                    }
                     if (still != null && !still.minimized && !still.hidden_by_desktop) {
                         set_anim (still, "minimize");
                         /* La ventana real aparece DEBAJO de la captura; la captura
                          * se retira cuando la app ya se ha dibujado (on_painted) */
                         wait_for_paint (still);
                         dpy.map_window (still.win);
+                        sync_bar (still);
                         if (after != null) after ();
                         if (still.anim != null && !still.anim.finished) {
                             still.anim.raise_above ();
@@ -1018,7 +1158,243 @@ namespace Fenster {
             c.mini_snapshot = null;
             set_anim (c, "minimize");
             dpy.map_window (c.win);
+            sync_bar (c);
             if (after != null) after ();
+        }
+
+        /* ---------------------------------------------------------------- */
+        /* Barra de título propia                                            */
+        /* ---------------------------------------------------------------- */
+
+        /* La barra de Fenster nunca por encima del área útil (bajo el panel o
+         * fuera de la pantalla): siempre debe poder agarrarse. */
+        Rect keep_bar_reachable (Client c, Rect g) {
+            if (c.deco_top == 0 || c.fullscreen) {
+                return g;
+            }
+            var wa = monitors.for_rect (g).work;
+            if (g.y - c.deco_top < wa.y) {
+                g.y = wa.y + c.deco_top;
+            }
+            return g;
+        }
+
+        Client? find_by_bar (X.Window w) {
+            if (w == 0) return null;
+            for (int i = 0; i < clients.length; i++) {
+                var c = clients[i];
+                if (c.bar != null && c.bar.window == w) return c;
+            }
+            return null;
+        }
+
+        /* _MOTIF_WM_HINTS con decorations = 0: la app dibuja su propia barra
+         * (GTK con headerbar, Firefox/Zen, Electron, Telegram…). */
+        bool motif_no_decorations (X.Window w) {
+            /* Cualquier tipo (AnyPropertyType): no todas las apps usan el mismo */
+            var m = get_longs (w, atoms.motif_wm_hints, (X.Atom) 0, 5);
+            return m.length >= 3 && (m[0] & 2) != 0 && m[2] == 0;
+        }
+
+        bool wants_decoration (Client c) {
+            if (c.kind != ClientKind.NORMAL && c.kind != ClientKind.DIALOG && c.kind != ClientKind.UTILITY) {
+                return false;
+            }
+            if (c.csd[0] != 0 || c.csd[1] != 0 || c.csd[2] != 0 || c.csd[3] != 0) {
+                return false;   /* CSD con márgenes: ya se decora sola */
+            }
+            return !motif_no_decorations (c.win);
+        }
+
+        /* La app cambió de idea sobre su decoración: poner o quitar la barra
+         * manteniendo el mismo rectángulo visible. */
+        void update_decoration (Client c) {
+            bool want_handles = wants_handles (c);
+            if (want_handles != (c.handles != null)) {
+                if (want_handles) {
+                    c.handles = new ResizeHandles (dpy, root, root_visual, resize_cursors);
+                } else {
+                    c.handles.destroy ();
+                    c.handles = null;
+                }
+                sync_bar (c);
+            }
+            bool want = config.titlebars && wants_decoration (c);
+            if (want == (c.bar != null)) {
+                return;
+            }
+            var vis = LinkedResize.visible (c, c.geom);
+            if (want) {
+                c.bar = new TitleBar (dpy, root, screen, atoms);
+                c.bar.title = c.title;
+                c.deco_top = Style.TITLEBAR_HEIGHT;
+                set_prop (c.win, atoms.fenster_decorated, Xc.XA_CARDINAL, { 1 });
+            } else {
+                c.bar.destroy ();
+                c.bar = null;
+                c.deco_top = 0;
+                dpy.delete_property (c.win, atoms.fenster_decorated);
+            }
+            set_prop (c.win, atoms.net_frame_extents, Xc.XA_CARDINAL, { 0, 0, c.deco_top, 0 });
+            if (!c.fullscreen) {
+                apply_geometry (c, with_csd (c, vis));
+            }
+            sync_bar (c);
+            restack ();
+        }
+
+        /* La barra se ve cuando su ventana se ve. */
+        void sync_bar (Client c) {
+            bool show = !c.minimized && !c.hidden_by_desktop && !c.fullscreen
+                        && !c.morph_hidden && !c.restoring;
+            if (c.handles != null) {
+                if (show && !c.maximized) {
+                    c.handles.place (LinkedResize.visible (c, c.geom));
+                    c.handles.show ();
+                    c.handles.raise ();
+                } else {
+                    c.handles.hide ();
+                }
+            }
+            if (c.bar == null) {
+                return;
+            }
+            shape_client (c);
+            if (show) {
+                c.bar.active = c == focused;
+                c.bar.set_radius (c.corner_radius ());
+                c.bar.place (c.geom);
+                c.bar.show ();
+                c.bar.raise ();
+                keep_overlays_on_top ();
+            } else {
+                c.bar.hide ();
+            }
+        }
+
+        /* Esquinas inferiores redondeadas de las ventanas con barra de Fenster
+         * (las superiores las dibuja la barra). picom no puede redondearlas
+         * porque barra y contenido son dos ventanas: se recorta con SHAPE. */
+        void shape_client (Client c) {
+            int r = c.bar != null ? c.corner_radius () : 0;
+            int w = c.geom.w, h = c.geom.h;
+            if (r == 0 || w < 2 * r || h < 2 * r) {
+                if (c.shaped) {
+                    Xs.combine_mask (dpy, c.win, Xs.BOUNDING, 0, 0, 0 /* None */, Xs.SET);
+                    c.shaped = false;
+                }
+                return;
+            }
+            if (c.shaped && c.shape_w == w && c.shape_h == h) {
+                return;
+            }
+            Xs.Rectangle[] rects = {};
+            rects += Xs.Rectangle () { x = 0, y = 0, width = (ushort) w, height = (ushort) (h - r) };
+            for (int i = 0; i < r; i++) {
+                double dy = i + 0.5;
+                int inset = (int) Math.round (r - Math.sqrt (r * r - dy * dy));
+                rects += Xs.Rectangle () {
+                    x = (short) inset, y = (short) (h - r + i),
+                    width = (ushort) (w - 2 * inset), height = 1
+                };
+            }
+            Xs.combine_rectangles (dpy, c.win, Xs.BOUNDING, 0, 0, rects, Xs.SET, Xs.UNSORTED);
+            c.shaped = true;
+            c.shape_w = w;
+            c.shape_h = h;
+        }
+
+        /* Bordes invisibles: para toda ventana normal sin márgenes CSD propios
+         * (las CSD como Tilix ya se redimensionan desde sus márgenes). */
+        bool wants_handles (Client c) {
+            if (c.kind != ClientKind.NORMAL && c.kind != ClientKind.DIALOG && c.kind != ClientKind.UTILITY) {
+                return false;
+            }
+            if (c.csd[0] != 0 || c.csd[1] != 0 || c.csd[2] != 0 || c.csd[3] != 0) {
+                return false;
+            }
+            return !c.hints.fixed ();
+        }
+
+        Client? find_by_handle (X.Window w, out int edge) {
+            edge = -1;
+            if (w == 0) return null;
+            for (int i = 0; i < clients.length; i++) {
+                var c = clients[i];
+                if (c.handles != null) {
+                    edge = c.handles.edge_of (w);
+                    if (edge >= 0) return c;
+                }
+            }
+            return null;
+        }
+
+        void refresh_bar (Client? c) {
+            if (c != null && c.bar != null) {
+                c.bar.active = c == focused;
+                c.bar.draw ();
+            }
+        }
+
+        void on_bar_press (Client c, ref X.ButtonEvent e) {
+            if (c.can_focus ()) {
+                focus (c);
+                raise (c);
+            }
+            if (e.button != 1) {
+                return;
+            }
+            var b = c.bar.button_at (e.x, e.y);
+            if (b != TitleButton.NONE) {
+                c.bar.pressed = b;
+                c.bar.draw ();
+                return;
+            }
+            /* Doble clic: maximizar / restaurar */
+            if (c.bar.last_click_time != 0
+                && e.time - c.bar.last_click_time < Style.TITLEBAR_DOUBLE_CLICK_MS) {
+                c.bar.last_click_time = 0;
+                bool on = !c.maximized;
+                animated (c, () => set_maximized (c, on));
+                return;
+            }
+            c.bar.last_click_time = e.time;
+            /* Arrastrar la barra mueve la ventana */
+            begin_drag (c, DragMode.MOVE, DIR_MOVE, e.x_root, e.y_root);
+        }
+
+        void on_bar_release (Client c, int x, int y) {
+            var p = c.bar.pressed;
+            c.bar.pressed = TitleButton.NONE;
+            c.bar.draw ();
+            if (p == TitleButton.NONE || c.bar.button_at (x, y) != p) {
+                return;   /* soltado fuera del botón: no hacer nada */
+            }
+            switch (p) {
+            case TitleButton.CLOSE:
+                close (c);
+                break;
+            case TitleButton.MINIMIZE:
+                minimize (c);
+                break;
+            case TitleButton.MAXIMIZE:
+                bool on = !c.maximized;
+                animated (c, () => set_maximized (c, on));
+                break;
+            default:
+                break;
+            }
+        }
+
+        void on_bar_motion (Client c, int x, int y) {
+            var h = c.bar.in_buttons_zone (x) ? c.bar.button_at (x, y) : TitleButton.NONE;
+            if (h == TitleButton.NONE && c.bar.in_buttons_zone (x)) {
+                h = TitleButton.CLOSE;  /* en la zona de los puntos se ven todos los símbolos */
+            }
+            if (h != c.bar.hover) {
+                c.bar.hover = h;
+                c.bar.draw ();
+            }
         }
 
         /* ---------------------------------------------------------------- */
@@ -1029,10 +1405,7 @@ namespace Fenster {
 
         /* Ejecuta un cambio de geometría con transición animada. */
         void animated (Client c, Change change) {
-            if (c.morph != null) {
-                c.morph.finish ();
-                c.morph = null;
-            }
+            finish_morph (c);
             bool can = config.animations && !c.kind.is_chrome () && !c.minimized
                        && !c.hidden_by_desktop && !c.fullscreen;
             Rect area = c.geom;
@@ -1042,53 +1415,59 @@ namespace Fenster {
                 return;
             }
             var old = c.geom;
-            /* La ventana real, invisible mientras cambia de tamaño y se redibuja */
-            set_anim (c, "morph");
-            hide_with_opacity (c);
+            int r_old = c.corner_radius ();
             change ();
             var now = c.geom;
             if (now.x == old.x && now.y == old.y && now.w == old.w && now.h == old.h) {
-                restore_opacity (c);
                 return;
             }
+            /* La ventana real se OCULTA durante la transición y se vuelve a mostrar
+             * al final (como al restaurar desde minimizado). Al reaparecer, picom
+             * crea su imagen desde cero; con opacidad 0 reutilizaba la imagen vieja
+             * estirada ("zoom") hasta que la app volvía a pintar. */
+            set_anim (c, "morph");
             var win = c.win;
-            var m = new MorphAnimation (dpy, root, screen, atoms, shot, area, clip_to_screen (now), () => {
+            var m = new MorphAnimation (dpy, root, screen, atoms, shot, area, clip_to_screen (outer (c, now)), () => {
                 var still = find (win);
-                if (still != null) {
-                    set_anim (still, "morph");  /* sin fundido de picom al reaparecer */
-                    restore_opacity (still);
-                    dpy.flush ();
+                if (still == null || !still.morph_hidden) {
+                    return;
                 }
+                still.morph_hidden = false;
+                if (still.minimized || still.hidden_by_desktop) {
+                    return;  /* otra acción la ocultó entretanto */
+                }
+                set_anim (still, "morph");  /* sin fundido de picom al reaparecer */
+                wait_for_paint (still);
+                dpy.map_window (still.win);
+                sync_bar (still);
+                if (focused == still) {
+                    focus (still, false);
+                }
+                keep_overlays_on_top ();
+                dpy.flush ();
             });
+            m.radius_from = r_old;
+            m.radius_to = c.corner_radius ();
             c.morph = m;
-            wait_for_paint (c);
-            m.start ();
+            m.start ();                 /* la captura tapa la ventana… */
+            c.morph_hidden = true;      /* …y entonces se oculta la real */
+            c.ignore_unmaps++;
+            dpy.unmap_window (c.win);
+            sync_bar (c);
+        }
+
+        /* Completa una transición en curso (la ventana vuelve a estar visible). */
+        void finish_morph (Client c) {
+            if (c.morph != null) {
+                c.morph.finish ();
+                c.morph = null;
+            }
         }
 
         Rect clip_to_screen (Rect g) {
             int x0 = int.max (g.x, 0), y0 = int.max (g.y, 0);
             int x1 = int.min (g.x + g.w, screen_w), y1 = int.min (g.y + g.h, screen_h);
             return Rect (x0, y0, int.max (1, x1 - x0), int.max (1, y1 - y0));
-        }
-
-        void hide_with_opacity (Client c) {
-            if (c.saved_opacity.length == 0) {
-                var cur = get_longs (c.win, atoms.net_wm_window_opacity, Xc.XA_CARDINAL, 1);
-                c.saved_opacity = cur.length > 0 ? cur : new long[] { -1 };
-            }
-            set_prop (c.win, atoms.net_wm_window_opacity, Xc.XA_CARDINAL, { 0 });
-        }
-
-        void restore_opacity (Client c) {
-            if (c.saved_opacity.length == 0) {
-                return;
-            }
-            if (c.saved_opacity[0] == -1) {
-                dpy.delete_property (c.win, atoms.net_wm_window_opacity);
-            } else {
-                set_prop (c.win, atoms.net_wm_window_opacity, Xc.XA_CARDINAL, c.saved_opacity);
-            }
-            c.saved_opacity = {};
         }
 
         /* DAMAGE avisa cuando la ventana recién mostrada ya tiene contenido. */
@@ -1131,6 +1510,7 @@ namespace Fenster {
             }
             var anim = new MinimizeAnimation (dpy, root, screen, atoms, snap, c.mini_rect,
                                               restoring, (owned) done);
+            anim.radius = c.corner_radius ();
             c.anim = anim;
             anim.start ();
         }
@@ -1160,6 +1540,20 @@ namespace Fenster {
                 Memory.copy (dst + y * stride, src + y * img.bytes_per_line, area.w * 4);
             }
             full.mark_dirty ();
+            /* Con barra de Fenster: la captura la incluye (la ventana se anima entera) */
+            if (c.bar != null && c.bar.visible && g.y - c.deco_top >= 0) {
+                int bh = c.deco_top;
+                var whole = new Cairo.ImageSurface (Cairo.Format.ARGB32, area.w, area.h + bh);
+                var cr = new Cairo.Context (whole);
+                cr.save ();
+                cr.translate (g.x - area.x, 0);
+                c.bar.render (cr, g.w);
+                cr.restore ();
+                cr.set_source_surface (full, 0, bh);
+                cr.paint ();
+                area = Rect (area.x, area.y - bh, area.w, area.h + bh);
+                return whole;
+            }
             /* A resolución completa: la animación se ve casi a tamaño real (90-100 %) */
             return full;
         }
@@ -1181,6 +1575,7 @@ namespace Fenster {
                 restore_geometry (c);
             }
             update_net_wm_state (c);
+            sync_bar (c);
         }
 
         /* Ajusta la ventana a una zona (mitad, cuarto o maximizar).
@@ -1213,6 +1608,7 @@ namespace Fenster {
             c.snap_zone = zone;
             apply_geometry (c, fit (c, with_csd (c, zone.rect (mon.work))));
             update_net_wm_state (c);
+            sync_bar (c);
         }
 
         void set_fullscreen (Client c, bool on) {
@@ -1232,6 +1628,7 @@ namespace Fenster {
                 }
             }
             update_net_wm_state (c);
+            sync_bar (c);
             restack ();
         }
 
@@ -1255,6 +1652,23 @@ namespace Fenster {
         /* ---------------------------------------------------------------- */
 
         void on_button_press (ref X.ButtonEvent e) {
+            var bc = find_by_bar (e.window);
+            if (bc != null) {
+                on_bar_press (bc, ref e);
+                return;
+            }
+            int edge;
+            var hc = find_by_handle (e.window, out edge);
+            if (hc != null) {
+                if (hc.can_focus ()) {
+                    focus (hc);
+                    raise (hc);
+                }
+                if (e.button == 1) {
+                    begin_drag (hc, DragMode.RESIZE, hc.handles.dir_at (edge, e.x, e.y), e.x_root, e.y_root);
+                }
+                return;
+            }
             var c = find (e.window);
             if (c == null) {
                 dpy.allow_events (Xc.REPLAY_POINTER, Xc.CURRENT_TIME);
@@ -1303,6 +1717,7 @@ namespace Fenster {
                 c.has_restore = false;
                 apply_geometry (c, r);
                 update_net_wm_state (c);
+                sync_bar (c);
             }
             drag = mode;
             drag_client = c;
@@ -1322,11 +1737,12 @@ namespace Fenster {
                     find_resize_links (c, dir);
                 }
             }
-            uint shape = mode == DragMode.MOVE ? Xc.XC_FLEUR : Xc.XC_BOTTOM_RIGHT_CORNER;
+            ulong cursor = mode == DragMode.MOVE ? Xx.create_font_cursor (dpy, Xc.XC_FLEUR)
+                         : resize_cursors[int.max (0, int.min (7, dir))];
             dpy.grab_pointer (root, false,
                               (uint) (Xc.BUTTON_RELEASE_MASK | Xc.POINTER_MOTION_MASK),
                               Xc.GRAB_MODE_ASYNC, Xc.GRAB_MODE_ASYNC, 0,
-                              (uint) Xx.create_font_cursor (dpy, shape), Xc.CURRENT_TIME);
+                              (uint) cursor, Xc.CURRENT_TIME);
         }
 
         void on_motion (int x, int y) {
@@ -1339,6 +1755,7 @@ namespace Fenster {
             if (drag == DragMode.MOVE) {
                 g.x += dx;
                 g.y += dy;
+                g = keep_bar_reachable (drag_client, g);
                 update_snap_preview (x, y);
             } else {
                 int d = drag_dir;
@@ -1854,18 +2271,20 @@ namespace Fenster {
 
         /* Reajusta las ventanas cuya geometría depende del monitor. */
         void reapply_states () {
-            clients.foreach ((c) => {
-                if (c.kind.is_chrome ()) return;
-                var mon = monitor_of (c);
-                if (c.fullscreen) {
-                    apply_geometry (c, mon.geom);
-                } else if (c.maximized) {
-                    apply_geometry (c, fit (c, with_csd (c, mon.work)));
-                } else if (c.snapped) {
-                    c.snapped = false;    /* snap() lo vuelve a marcar */
-                    snap (c, c.snap_zone, mon);
-                }
-            });
+            clients.foreach ((c) => { reapply_client (c); });
+        }
+
+        void reapply_client (Client c) {
+            if (c.kind.is_chrome ()) return;
+            var mon = monitor_of (c);
+            if (c.fullscreen) {
+                apply_geometry (c, mon.geom);
+            } else if (c.maximized) {
+                apply_geometry (c, fit (c, with_csd (c, mon.work)));
+            } else if (c.snapped) {
+                c.snapped = false;    /* snap() lo vuelve a marcar */
+                snap (c, c.snap_zone, mon);
+            }
         }
 
         /* ---------------------------------------------------------------- */
@@ -2026,6 +2445,7 @@ namespace Fenster {
             if (drag != DragMode.NONE) {
                 end_drag ();
             }
+            clients.foreach ((c) => { finish_morph (c); });
             /* Dirección del deslizamiento (picom lo lee de _FENSTER_ANIM) */
             var anim = d > current_desktop ? "desk-next" : "desk-prev";
             current_desktop = d;
@@ -2051,6 +2471,7 @@ namespace Fenster {
                 }
             });
             set_prop (root, atoms.net_current_desktop, Xc.XA_CARDINAL, { (long) d });
+            clients.foreach ((c) => { sync_bar (c); });
             if (focused == null || !focused.can_focus ()) {
                 focused = null;
                 focus_next ();
@@ -2084,6 +2505,7 @@ namespace Fenster {
 
         /* Muestra/oculta cada ventana según el escritorio actual. */
         void sync_visibility () {
+            clients.foreach ((c) => { finish_morph (c); });
             clients.foreach ((c) => {
                 bool should_hide = !c.on_desktop (current_desktop);
                 if (should_hide && !c.hidden_by_desktop) {
@@ -2099,6 +2521,7 @@ namespace Fenster {
                     }
                 }
             });
+            clients.foreach ((c) => { sync_bar (c); });
             if (focused != null && !focused.can_focus ()) {
                 focused = null;
                 focus_next ();

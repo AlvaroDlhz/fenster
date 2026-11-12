@@ -102,6 +102,11 @@ namespace Fenster {
             }
         }
 
+        /* Eventos adicionales (clics, movimiento, salida) para ventanas interactivas. */
+        public void select_input (long mask) {
+            dpy.select_input (win, mask | (1L << 15) /* Exposure */);
+        }
+
         /* Publica un rectángulo en una propiedad (CARDINAL x, y, ancho, alto). */
         public void set_rect_hint (string name, Rect r) {
             long[] v = { r.x, r.y, r.w, r.h };

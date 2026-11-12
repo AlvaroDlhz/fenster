@@ -18,6 +18,7 @@ namespace Fenster {
         Rect from;
         Rect box;
         bool restoring;
+        public double radius = 0;   /* esquinas de la ventana (12 px o 0 si maximizada) */
         int64 started = 0;
         uint timer = 0;
         Done? done;
@@ -155,6 +156,10 @@ namespace Fenster {
             cr.paint ();
             if (alpha > 0) {
                 cr.set_operator (Cairo.Operator.OVER);
+                if (radius > 0) {
+                    ArgbWindow.rounded (cr, x, y, w, h, radius * scale);
+                    cr.clip ();
+                }
                 cr.translate (x, y);
                 cr.scale (w / snap.get_width (), h / snap.get_height ());
                 cr.set_source_surface (source, 0, 0);

@@ -51,8 +51,8 @@ teclado y ratón (`scripts/fake-input.py`) y comprueba colocación, ajuste,
 saltos entre monitores, Alt+Tab, arrastre, escritorios, capas, pistas de
 tamaño, modales, urgencia, robo de foco, el panel del Alt+Tab (píxel a
 píxel), iconos, vista previa del ajuste, cuartos, animación de minimizar y
-reglas por aplicación y redimensionado enlazado (96 comprobaciones; tarda
-unos 3 minutos). Necesita
+reglas por aplicación, redimensionado enlazado, transiciones, barra de
+título y bordes invisibles (128 comprobaciones; tarda unos 4 minutos). Necesita
 `xterm`, `wmctrl`, `xprop`, `xwininfo` y python3-gi (GTK 3).
 
 ## Probar en la sesión real
@@ -76,28 +76,45 @@ ocultas para que el siguiente gestor las encuentre.
 al guardar y afecta a las ventanas que se abran después.
 
 ```ini
-[General]
-escritorios = 4          # si no hay un gestor previo del que heredarlos
-animaciones = true       # animación al minimizar/restaurar
-redimension-enlazada = true  # las ventanas pegadas cambian de tamaño juntas
+# Los comentarios van siempre en su propia línea: el formato no admite
+# comentarios al final de una línea (el valor se leería entero).
 
-[Regla Tilix]            # cualquier grupo que empiece por «Regla»
-clase = Tilix            # WM_CLASS (xprop WM_CLASS + clic en la ventana)
-tamaño = 60%x70%         # o 1200x800
-posicion = centro        # o 100,80 (relativo al monitor)
+[General]
+# si no hay un gestor previo del que heredarlos
+escritorios = 4
+# animación al minimizar/restaurar
+animaciones = true
+# las ventanas pegadas cambian de tamaño juntas
+redimension-enlazada = true
+# barra propia para las apps que no dibujan la suya (Thunar, xterm…)
+barras-de-titulo = true
+
+# Cualquier grupo que empiece por «Regla»
+[Regla Tilix]
+# WM_CLASS: xprop WM_CLASS + clic en la ventana
+clase = Tilix
+# o 1200x800
+tamaño = 60%x70%
+# o 100,80 (relativo al monitor)
+posicion = centro
 
 [Regla Telegram]
 clase = TelegramDesktop
-escritorio = 2           # 1…n o «todos»
+# 1…n o «todos»
+escritorio = 2
 
 [Regla preferencias]
-titulo = ^Preferencias   # expresión regular sobre el título
-estado = derecha         # maximizada, pantalla-completa, minimizada,
-                         # izquierda, derecha, arriba-izquierda, …
+# expresión regular sobre el título
+titulo = ^Preferencias
+# maximizada, pantalla-completa, minimizada, izquierda, derecha,
+# arriba-izquierda, arriba-derecha, abajo-izquierda, abajo-derecha
+estado = derecha
 encima = true
 en-alt-tab = false
-enfocar = false          # no darle el foco al abrirse
-monitor = principal      # o 1, 2…
+# no darle el foco al abrirse
+enfocar = false
+# principal, 1, 2…
+monitor = principal
 ```
 
 ## Atajos
@@ -122,6 +139,8 @@ monitor = principal      # o 1, 2…
 | Alt + arrastrar (clic der.) | Redimensionar desde la esquina más cercana |
 | Arrastrar a un borde / esquina | Vista previa; al soltar: mitad, cuarto o maximizar (arriba) |
 | Redimensionar junto a otras | Las ventanas pegadas se ajustan a la vez (borde común) |
+| Barra de título (apps sin la suya) | Arrastrar = mover · doble clic = maximizar · – + ✕ a la derecha |
+| Bordes de cualquier ventana | Arrastrar para redimensionar (también esquinas) |
 
 ## Estructura
 
@@ -137,6 +156,8 @@ src/snap.vala            zonas de ajuste (mitades, cuartos) y su vista previa
 src/linked-resize.vala   redimensionado enlazado de ventanas pegadas
 src/minimize.vala        animación de minimizar/restaurar en el sitio
 src/morph.vala           transición animada al maximizar, ajustar o cambiar de monitor
+src/decoration.vala      barra de título propia para apps sin decoración
+src/handles.vala         bordes invisibles para redimensionar cualquier ventana
 src/config.vala          configuración y reglas por aplicación
 src/icons.vala           iconos: _NET_WM_ICON, .desktop y tema (sin GTK)
 src/style.vala           tokens visuales y de movimiento (de Dock-e)

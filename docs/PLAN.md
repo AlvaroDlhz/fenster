@@ -124,4 +124,11 @@ Curva: *ease-out*, sin rebotes (salvo avisos urgentes).
 - [x] Redimensionado enlazado: las ventanas pegadas comparten el borde al
       cambiar de tamaño (vecinas y hermanas alineadas, respetando mínimos)
 - [ ] Vista general de ventanas (tipo Mission Control)
-- [ ] Barra de título mínima opcional para apps sin CSD
+- [x] Barra de título propia para apps sin decoración (Thunar, xterm, Qt…):
+      negra de 28 px, título centrado, botones – + ✕ a la derecha; arrastrar
+      mueve, doble clic maximiza; nunca queda fuera del área útil
+- [x] Bordes invisibles de 6 px por fuera de toda ventana sin márgenes CSD
+      propios, con esquinas y cursores de redimensionado
+- [x] Las apps CSD que cambian sus márgenes al maximizarse (Tilix) se
+      reajustan al momento (antes quedaban "con zoom", fuera de la pantalla)
+- [x] `_NET_MOVERESIZE_WINDOW` (paginadores y apps que mueven ventanas)

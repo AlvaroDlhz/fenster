@@ -27,9 +27,11 @@ namespace Fenster {
         public const int TOLERANCE = 12;    /* px entre bordes para considerarlos pegados */
         public const int MIN_OVERLAP = 40;  /* px que deben compartir */
 
+        /* Rectángulo visible: sin márgenes CSD y con la barra de Fenster si la hay. */
         public Rect visible (Client c, Rect g) {
-            return Rect (g.x + (int) c.csd[0], g.y + (int) c.csd[2],
-                         g.w - (int) (c.csd[0] + c.csd[1]), g.h - (int) (c.csd[2] + c.csd[3]));
+            return Rect (g.x + (int) c.csd[0], g.y + (int) c.csd[2] - c.deco_top,
+                         g.w - (int) (c.csd[0] + c.csd[1]),
+                         g.h - (int) (c.csd[2] + c.csd[3]) + c.deco_top);
         }
 
         public int min_w (Client c) {

@@ -3,11 +3,10 @@ namespace Fenster {
      * restaurar, cambiar de monitor).
      *
      *  1. Se captura la ventana y se cubre con la captura (fotograma idéntico).
-     *  2. La ventana real se vuelve invisible (opacidad 0 vía picom) y cambia
-     *     de tamaño: la app se redibuja sin que se vea.
+     *  2. La ventana real cambia de tamaño y se oculta.
      *  3. La captura se transforma del rectángulo viejo al nuevo (200 ms).
-     *  4. Cuando ha llegado y la app ya se ha pintado (DAMAGE), la ventana real
-     *     recupera la opacidad y la captura se desvanece encima (90 ms):
+     *  4. Al llegar, la ventana real se muestra DEBAJO de la captura; cuando la
+     *     app ya se ha pintado (DAMAGE), la captura se desvanece encima (90 ms):
      *     fundido cruzado entre la imagen estirada y el contenido real.
      *
      * Todo se compone en el servidor X con XRender (captura subida una vez,
@@ -21,6 +20,8 @@ namespace Fenster {
         Rect to;
         Rect box;
         Reveal? reveal;
+        public double radius_from = 0;   /* esquinas antes y después (0 = maximizada) */
+        public double radius_to = 0;
 
         Cairo.Surface? target = null;
         Cairo.Surface? back = null;
@@ -83,6 +84,7 @@ namespace Fenster {
                 draw (1, 1);
                 if (!arrived) {
                     arrived = true;
+                    run_reveal ();   /* la ventana real aparece debajo */
                     hold_timeout = Timeout.add (MAX_HOLD_MS, () => {
                         hold_timeout = 0;
                         painted = true;
@@ -121,7 +123,6 @@ namespace Fenster {
                 Source.remove (hold_timeout);
                 hold_timeout = 0;
             }
-            run_reveal ();
             fading = true;
             fade_started = get_monotonic_time ();
             if (timer == 0) {
@@ -179,6 +180,11 @@ namespace Fenster {
             cr.paint ();
             if (alpha > 0) {
                 cr.set_operator (Cairo.Operator.OVER);
+                double r = radius_from + (radius_to - radius_from) * e;
+                if (r > 0.5) {
+                    ArgbWindow.rounded (cr, x, y, w, h, r);
+                    cr.clip ();
+                }
                 cr.translate (x, y);
                 cr.scale (w / snap.get_width (), h / snap.get_height ());
                 cr.set_source_surface (source, 0, 0);

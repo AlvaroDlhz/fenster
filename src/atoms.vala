@@ -49,6 +49,9 @@ namespace Fenster {
         public X.Atom net_wm_icon;
         public X.Atom fenster_anim;
         public X.Atom net_wm_window_opacity;
+        public X.Atom motif_wm_hints;
+        public X.Atom net_moveresize_window;
+        public X.Atom fenster_decorated;
         public X.Atom wm_normal_hints;
         public X.Atom net_desktop_viewport;
         public X.Atom net_desktop_geometry;
@@ -109,6 +112,9 @@ namespace Fenster {
             net_wm_icon = d.intern_atom ("_NET_WM_ICON", false);
             fenster_anim = d.intern_atom ("_FENSTER_ANIM", false);
             net_wm_window_opacity = d.intern_atom ("_NET_WM_WINDOW_OPACITY", false);
+            motif_wm_hints = d.intern_atom ("_MOTIF_WM_HINTS", false);
+            net_moveresize_window = d.intern_atom ("_NET_MOVERESIZE_WINDOW", false);
+            fenster_decorated = d.intern_atom ("_FENSTER_DECORATED", false);
             wm_normal_hints = d.intern_atom ("WM_NORMAL_HINTS", false);
             net_desktop_viewport = d.intern_atom ("_NET_DESKTOP_VIEWPORT", false);
             net_desktop_geometry = d.intern_atom ("_NET_DESKTOP_GEOMETRY", false);
@@ -129,6 +135,7 @@ namespace Fenster {
                 net_close_window, net_number_of_desktops, net_current_desktop,
                 net_desktop_names, net_wm_desktop, net_workarea,
                 net_frame_extents, net_request_frame_extents, net_wm_moveresize,
+                net_moveresize_window,
                 net_wm_strut, net_wm_strut_partial,
                 net_wm_state, net_wm_state_fullscreen, net_wm_state_maximized_vert,
                 net_wm_state_maximized_horz, net_wm_state_hidden,

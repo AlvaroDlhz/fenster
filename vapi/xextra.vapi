@@ -193,3 +193,31 @@ namespace Xd {
     [CCode (cname = "XDamageNotify")]
     public const int NOTIFY;
 }
+
+/* SHAPE: recortar las esquinas inferiores de las ventanas con barra de Fenster */
+[CCode (cheader_filename = "X11/Xlib.h,X11/extensions/shape.h")]
+namespace Xs {
+    [CCode (cname = "XRectangle", has_type_id = false, destroy_function = "")]
+    public struct Rectangle {
+        public short x;
+        public short y;
+        public ushort width;
+        public ushort height;
+    }
+
+    [CCode (cname = "XShapeCombineRectangles")]
+    public void combine_rectangles (X.Display dpy, X.Window w, int kind, int x_off, int y_off,
+                                    [CCode (array_length_pos = 6.1)] Rectangle[] rects,
+                                    int op, int ordering);
+
+    [CCode (cname = "XShapeCombineMask")]
+    public void combine_mask (X.Display dpy, X.Window w, int kind, int x_off, int y_off,
+                              ulong src, int op);
+
+    [CCode (cname = "ShapeBounding")]
+    public const int BOUNDING;
+    [CCode (cname = "ShapeSet")]
+    public const int SET;
+    [CCode (cname = "Unsorted")]
+    public const int UNSORTED;
+}
