@@ -40,6 +40,24 @@ make run-xephyr
 Abre una pantalla anidada con Fenster, Tilix y xterm dentro. Tu sesión real
 no se toca.
 
+## Usarlo como gestor de ventanas predeterminado
+
+```sh
+make install     # ~/.local/bin/fenster y ~/.local/bin/fenster-session
+```
+
+y una entrada de arranque automático en `~/.config/autostart/fenster.desktop`
+con `Exec=$HOME/.local/bin/fenster-session`.
+
+`fenster-session` deja que XFCE arranque xfwm4 y lo sustituye a los 2
+segundos. **Si Fenster se cae, vuelve a lanzar xfwm4 al instante**: nunca te
+quedas sin gestor de ventanas. El registro queda en
+`~/.local/state/fenster.log`.
+
+Para volver a xfwm4 como predeterminado: borra (o pon `Hidden=true` en)
+`~/.config/autostart/fenster.desktop`. Para cambiar solo en la sesión actual:
+`xfwm4 --replace &` (Fenster sale con normalidad y no se relanza nada).
+
 ## Pruebas automáticas
 
 ```sh
@@ -165,6 +183,7 @@ src/xconst.vala          constantes de X11
 vapi/xextra.vapi         bindings de Xlib que faltan en Vala
 data/picom/fenster.conf  animaciones y reglas para picom v12
 scripts/build-picom.sh   compila picom v12 en ~/.local/opt/picom-12
+scripts/fenster-session  arranque en la sesión con vuelta a xfwm4 si Fenster falla
 scripts/xephyr.sh        entorno de pruebas anidado (visible)
 scripts/test.sh          pruebas automáticas (invisibles)
 scripts/fake-input.py    simulador de teclado y ratón (XTest)

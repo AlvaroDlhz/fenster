@@ -1,0 +1,25 @@
+#!/usr/bin/env sh
+# Arranca Fenster como gestor de ventanas de la sesión, sustituyendo a xfwm4.
+# Red de seguridad: si Fenster se cae (código distinto de 0), vuelve xfwm4
+# al instante para no quedarse nunca sin gestor de ventanas.
+#
+# Salida 0 = salida normal (cierre de sesión, o se pidió otro gestor con
+# «xfwm4 --replace»): no se hace nada.
+
+FENSTER="${FENSTER:-$HOME/.local/bin/fenster}"
+FALLBACK="${FENSTER_FALLBACK:-xfwm4}"
+LOG="${XDG_STATE_HOME:-$HOME/.local/state}/fenster.log"
+mkdir -p "$(dirname "$LOG")"
+
+# Deja que la sesión termine de arrancar (xfwm4, panel, Dock-e) antes de sustituir
+sleep "${FENSTER_DELAY:-2}"
+
+echo "[$(date -Is)] fenster-session: arrancando $FENSTER" >>"$LOG"
+"$FENSTER" --replace >>"$LOG" 2>&1
+code=$?
+
+if [ "$code" -ne 0 ]; then
+    echo "[$(date -Is)] Fenster salió con código $code: se recupera $FALLBACK" >>"$LOG"
+    exec "$FALLBACK" --replace
+fi
+echo "[$(date -Is)] Fenster terminó con normalidad" >>"$LOG"

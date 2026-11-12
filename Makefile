@@ -18,9 +18,10 @@ $(BUILDDIR)/fenster: $(SOURCES) vapi/xextra.vapi
 
 install: all
 	install -Dm755 $(BUILDDIR)/fenster $(PREFIX)/bin/fenster
+	install -Dm755 scripts/fenster-session $(PREFIX)/bin/fenster-session
 
 uninstall:
-	rm -f $(PREFIX)/bin/fenster
+	rm -f $(PREFIX)/bin/fenster $(PREFIX)/bin/fenster-session
 
 run-xephyr: all
 	./scripts/xephyr.sh
