@@ -14,6 +14,11 @@ namespace Fenster.Style {
     public const int OPEN_MS = 230;        /* ItemMoveTime */
     public const int CLOSE_MS = 120;       /* HideTime */
     public const int MINIMIZE_MS = 300;    /* SlideTime */
+
+    /* Minimizar/restaurar en el sitio: encoger, bajar y desvanecer */
+    public const int MINIMIZE_ANIM_MS = 220;
+    public const double MINIMIZE_SCALE = 0.90;
+    public const int MINIMIZE_DROP = 16;      /* px */
     public const int GEOMETRY_MS = 300;    /* ActiveTime */
     public const int SWITCHER_MS = 120;    /* HideTime */
 

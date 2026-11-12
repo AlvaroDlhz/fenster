@@ -182,6 +182,12 @@ namespace Fenster {
             return "win-%lx".printf ((ulong) win);
         }
 
+        /* Minimizar hacia Dock-e: captura reducida y animación en curso */
+        public Cairo.ImageSurface? mini_snapshot = null;
+        public Rect mini_rect;
+        public MinimizeAnimation? anim = null;
+        public ulong paint_damage = 0;   /* DAMAGE: esperando a que se pinte */
+
         /* Prevención de robo de foco (_NET_WM_USER_TIME) */
         public X.Window user_time_win = 0;
         public ulong user_time = 0;

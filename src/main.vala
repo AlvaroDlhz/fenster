@@ -3,19 +3,30 @@ namespace Fenster {
 
     int main (string[] args) {
         bool replace = false;
-        foreach (var a in args[1:args.length]) {
+        string? config_path = null;
+        for (int i = 1; i < args.length; i++) {
+            var a = args[i];
             switch (a) {
             case "--replace":
                 replace = true;
+                break;
+            case "--config":
+                if (i + 1 >= args.length) {
+                    printerr ("--config necesita una ruta\n");
+                    return 2;
+                }
+                config_path = args[++i];
                 break;
             case "--version":
                 print ("Fenster %s\n", VERSION);
                 return 0;
             case "-h":
             case "--help":
-                print ("Uso: fenster [--replace] [--version]\n\n"
-                       + "  --replace   sustituye al gestor de ventanas actual (p. ej. xfwm4)\n"
-                       + "  --version   muestra la versión\n\n"
+                print ("Uso: fenster [--replace] [--config RUTA] [--version]\n\n"
+                       + "  --replace       sustituye al gestor de ventanas actual (p. ej. xfwm4)\n"
+                       + "  --config RUTA   archivo de configuración (por defecto\n"
+                       + "                  ~/.config/fenster/fenster.conf)\n"
+                       + "  --version       muestra la versión\n\n"
                        + "Depuración: G_MESSAGES_DEBUG=all fenster\n");
                 return 0;
             default:
@@ -25,7 +36,7 @@ namespace Fenster {
         }
 
         try {
-            var wm = new WindowManager ();
+            var wm = new WindowManager (config_path);
             wm.start (replace);
             wm.run ();
         } catch (Error e) {

@@ -23,7 +23,25 @@ export DISPLAY=$DISP
 cleanup() { kill $FENSTER $XEPHYR $XVFB 2>/dev/null; wait 2>/dev/null; }
 trap cleanup EXIT
 
-G_MESSAGES_DEBUG=Fenster ./build/fenster >"$LOG" 2>&1 & FENSTER=$!
+# Configuración de prueba (reglas por aplicación)
+CONF="${TMPDIR:-/tmp}/fenster-test.conf"
+cat >"$CONF" <<'CONFEOF'
+[General]
+escritorios = 4
+
+[Regla centrada en el monitor 2]
+titulo = ^prueba-plain-regla$
+monitor = 2
+tamaño = 50%x50%
+encima = true
+en-alt-tab = false
+
+[Regla mitad derecha]
+titulo = ^prueba-plain-derecha$
+estado = derecha
+CONFEOF
+
+G_MESSAGES_DEBUG=Fenster ./build/fenster --config "$CONF" >"$LOG" 2>&1 & FENSTER=$!
 sleep 0.8
 
 geo() {
@@ -126,7 +144,10 @@ check "Arrastrar una ventana ajustada recupera su tamaño" "484x316" "$(geo "$B"
 
 echo "== Vista previa del ajuste y cuartos"
 preview_win() { xwininfo -root -tree | awk '/"fenster-snap-preview"/{print $1; exit}'; }
-mapstate() { xwininfo -id "$1" | awk '/Map State/{print $NF}'; }
+mapstate() {  # sin id, xwininfo esperaría un clic: devolver algo y seguir
+    [ -n "$1" ] || { echo "(sin ventana)"; return; }
+    xwininfo -id "$1" | awk '/Map State/{print $NF}'
+}
 just_below() {  # ¿$1 está inmediatamente debajo de $2? (xwininfo lista de arriba abajo)
     local prev="" w
     for w in $(xwininfo -root -children | grep -o '^ *0x[0-9a-f]*'); do
@@ -172,7 +193,7 @@ wmctrl -i -a "$B"; sleep 0.2; $FI key super+Up; sleep 0.2
 check "Maximizar ocupa todo el monitor izquierdo" "0,0 1280x800" "$(geo "$B")"
 
 echo "== Escritorios virtuales"
-mapped() { xwininfo -id "$1" | awk '/Map State/{print $NF}'; }
+mapped() { mapstate "$1"; }
 cur() { xprop -root _NET_CURRENT_DESKTOP | awk '{print $NF}'; }
 desk() { xprop -id "$1" _NET_WM_DESKTOP | awk '{print $NF}'; }
 state() { xprop -id "$1" _NET_WM_STATE; }
@@ -265,6 +286,80 @@ check "WM_HINTS urgente → pide atención" "1" "$(state "$UR" | grep -c DEMANDS
 wmctrl -i -a "$UR"; sleep 0.2
 check "enfocarla limpia la urgencia" "0" "$(state "$UR" | grep -c DEMANDS_ATTENTION)"
 wmctrl -i -c "$UR"; sleep 0.3
+
+echo "== Minimizar en el sitio (encoger, bajar y desvanecer)"
+anim_win() { xwininfo -root -tree | awk '/"fenster-minimize"/{print $1; exit}'; }
+wmctrl -i -a "$A"; sleep 0.3
+wmctrl -i -r "$A" -b add,hidden; sleep 0.1
+AW=$(anim_win)
+check "minimizar muestra la animación" "IsViewable" "$(mapstate "$AW")"
+check "y la ventana real ya está oculta" "IsUnMapped" "$(mapstate "$A")"
+read -r ax ay aw ah <<<"$(geo "$AW" | tr ',x' '  ')"
+check "la animación ocupa la ventana más su descenso de 16 px" "$(geo "$A" | awk '{split($2,s,"x"); print s[1]"x"s[2]+16}')" "${aw}x${ah}"
+sleep 0.5
+check "la animación termina y se retira" "" "$(anim_win)"
+check "la ventana queda minimizada" "1" "$(state "$A" | grep -c HIDDEN)"
+wmctrl -i -a "$A"; sleep 0.1
+check "restaurar también anima" "IsViewable" "$(mapstate "$(anim_win)")"
+check "con la ventana aún oculta durante la animación" "IsUnMapped" "$(mapstate "$A")"
+sleep 0.5
+check "al terminar aparece la ventana real" "IsViewable" "$(mapstate "$A")"
+check "y la captura se retira en cuanto la ventana está pintada (DAMAGE)" "" "$(anim_win)"
+check "y recibe el foco" "$(norm "$A")" "$(norm "$(active)")"
+xterm & sleep 0.8; E=$(newest)   # ventana sin ajustar: Super+↓ minimiza
+FI_SLEEP=0 $FI key super+Down; sleep 0.05
+check "Super+↓ también minimiza con animación" "IsViewable" "$(mapstate "$(anim_win)")"
+sleep 0.5; wmctrl -i -c "$E"; sleep 0.3
+
+echo "== Reglas por aplicación (~/.config/fenster/fenster.conf)"
+$FI move 300 300
+$TC plain-regla 2>/dev/null & sleep 1.2; R1=$(by_title "prueba-plain-regla")
+check "monitor y tamaño de la regla (50 % centrado en el monitor 2)" "1600,200 640x400" "$(geo "$R1")"
+check "siempre encima por regla" "1" "$(state "$R1" | grep -c ABOVE)"
+check "fuera del Alt+Tab por regla" "1" "$(state "$R1" | grep -c SKIP_TASKBAR)"
+$TC plain-derecha 2>/dev/null & sleep 1.2; R2=$(by_title "prueba-plain-derecha")
+check "estado inicial de la regla (mitad derecha)" "640,0 640x800" "$(geo "$R2")"
+cat >>"$CONF" <<'CONFEOF'
+
+[Regla recarga]
+titulo = ^prueba-plain-recarga$
+estado = maximizada
+CONFEOF
+sleep 1
+$TC plain-recarga 2>/dev/null & sleep 1.2; R3=$(by_title "prueba-plain-recarga")
+check "el archivo se recarga solo al guardarlo" "1" "$(state "$R3" | grep -c MAXIMIZED_VERT)"
+wmctrl -i -c "$R1"; wmctrl -i -c "$R2"; wmctrl -i -c "$R3"; sleep 0.3
+
+echo "== Redimensionado enlazado"
+rdrag() {  # rdrag X0 Y0 X1 Y1: Alt+clic derecho arrastrando (redimensionar)
+    $FI move "$1" "$2"; $FI hold alt; $FI down 3
+    $FI move $(( ($1 + $3) / 2 )) $(( ($2 + $4) / 2 )); $FI move "$3" "$4"
+    $FI up 3; $FI release alt; sleep 0.2
+}
+wmctrl -s 3; sleep 0.3   # escritorio vacío
+$FI move 300 300
+xterm & sleep 0.8; P=$(newest); $FI key super+Left; sleep 0.2
+xterm & sleep 0.8; Q=$(newest); $FI key super+Right; sleep 0.2
+rdrag 630 700 730 700
+check "dos mitades: la de la izquierda crece" "0,0 740x800" "$(geo "$P")"
+check "y la de la derecha encoge sin dejar hueco" "740,0 540x800" "$(geo "$Q")"
+wmctrl -i -a "$P"; $FI key super+Left; sleep 0.2
+wmctrl -i -a "$Q"; $FI key super+Right; $FI key super+Up; sleep 0.2
+xterm & sleep 0.8; R=$(newest); $FI key super+Right; $FI key super+Down; sleep 0.2
+rdrag 630 600 580 600
+check "mitad frente a dos cuartos: la mitad encoge" "0,0 590x800" "$(geo "$P")"
+check "el cuarto superior sigue al borde" "590,0 690x400" "$(geo "$Q")"
+check "y el inferior también" "590,400 690x400" "$(geo "$R")"
+rdrag 610 30 640 30
+check "desde el otro lado: la vecina sigue" "0,0 620x800" "$(geo "$P")"
+check "y la hermana alineada también" "620,400 660x400" "$(geo "$R")"
+rdrag 1200 390 1200 490
+check "borde horizontal entre cuartos: el de arriba crece" "620,0 660x500" "$(geo "$Q")"
+check "y el de abajo encoge" "620,500 660x300" "$(geo "$R")"
+rdrag 600 700 3000 700
+check "nadie baja de su tamaño mínimo (64 px)" "1216 64 64" \
+    "$(geo "$P" | awk '{split($2,a,"x"); print a[1]}') $(geo "$Q" | awk '{split($2,a,"x"); print a[1]}') $(geo "$R" | awk '{split($2,a,"x"); print a[1]}')"
+wmctrl -i -c "$P"; wmctrl -i -c "$Q"; wmctrl -i -c "$R"; sleep 0.3; wmctrl -s 0
 
 echo
 echo "Resultado: $PASS correctas, $FAIL fallidas   (registro: $LOG)"

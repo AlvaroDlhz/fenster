@@ -50,7 +50,9 @@ Monta dos monitores virtuales invisibles (Xvfb + Xephyr anidado), simula
 teclado y ratón (`scripts/fake-input.py`) y comprueba colocación, ajuste,
 saltos entre monitores, Alt+Tab, arrastre, escritorios, capas, pistas de
 tamaño, modales, urgencia, robo de foco, el panel del Alt+Tab (píxel a
-píxel), iconos, vista previa del ajuste y cuartos (72 comprobaciones). Necesita
+píxel), iconos, vista previa del ajuste, cuartos, animación de minimizar y
+reglas por aplicación y redimensionado enlazado (96 comprobaciones; tarda
+unos 3 minutos). Necesita
 `xterm`, `wmctrl`, `xprop`, `xwininfo` y python3-gi (GTK 3).
 
 ## Probar en la sesión real
@@ -67,6 +69,36 @@ Al reemplazar a xfwm4, Fenster conserva el número de escritorios, el
 escritorio actual, en qué escritorio estaba cada ventana y cuál tenía el foco.
 Al salir o ser reemplazado, vuelve a mostrar todas las ventanas que tenía
 ocultas para que el siguiente gestor las encuentre.
+
+## Configuración
+
+`~/.config/fenster/fenster.conf` (o `fenster --config RUTA`). Se recarga sola
+al guardar y afecta a las ventanas que se abran después.
+
+```ini
+[General]
+escritorios = 4          # si no hay un gestor previo del que heredarlos
+animaciones = true       # animación al minimizar/restaurar
+redimension-enlazada = true  # las ventanas pegadas cambian de tamaño juntas
+
+[Regla Tilix]            # cualquier grupo que empiece por «Regla»
+clase = Tilix            # WM_CLASS (xprop WM_CLASS + clic en la ventana)
+tamaño = 60%x70%         # o 1200x800
+posicion = centro        # o 100,80 (relativo al monitor)
+
+[Regla Telegram]
+clase = TelegramDesktop
+escritorio = 2           # 1…n o «todos»
+
+[Regla preferencias]
+titulo = ^Preferencias   # expresión regular sobre el título
+estado = derecha         # maximizada, pantalla-completa, minimizada,
+                         # izquierda, derecha, arriba-izquierda, …
+encima = true
+en-alt-tab = false
+enfocar = false          # no darle el foco al abrirse
+monitor = principal      # o 1, 2…
+```
 
 ## Atajos
 
@@ -89,6 +121,7 @@ ocultas para que el siguiente gestor las encuentre.
 | Alt + arrastrar (clic izq.) | Mover |
 | Alt + arrastrar (clic der.) | Redimensionar desde la esquina más cercana |
 | Arrastrar a un borde / esquina | Vista previa; al soltar: mitad, cuarto o maximizar (arriba) |
+| Redimensionar junto a otras | Las ventanas pegadas se ajustan a la vez (borde común) |
 
 ## Estructura
 
@@ -101,6 +134,9 @@ src/atoms.vala           atoms ICCCM / EWMH
 src/argb-window.vala     ventanas propias transparentes dibujadas con cairo
 src/switcher.vala        panel del Alt+Tab
 src/snap.vala            zonas de ajuste (mitades, cuartos) y su vista previa
+src/linked-resize.vala   redimensionado enlazado de ventanas pegadas
+src/minimize.vala        animación de minimizar/restaurar en el sitio
+src/config.vala          configuración y reglas por aplicación
 src/icons.vala           iconos: _NET_WM_ICON, .desktop y tema (sin GTK)
 src/style.vala           tokens visuales y de movimiento (de Dock-e)
 src/xconst.vala          constantes de X11

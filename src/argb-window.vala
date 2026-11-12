@@ -84,12 +84,39 @@ namespace Fenster {
             }
         }
 
+        /* Envía al servidor X lo pendiente: necesario en callbacks de
+         * temporizador, fuera del bucle de eventos (que vacía al leer). */
+        public void flush () {
+            dpy.flush ();
+        }
+
+        public void destroy () {
+            hide ();
+            if (win != 0) {
+                Xx.destroy_window (dpy, win);
+                win = 0;
+            }
+        }
+
+        public void raise () {
+            if (visible) {
+                dpy.raise_window (win);
+            }
+        }
+
         /* Coloca la ventana justo debajo de otra (p. ej. la que se arrastra). */
         public void stack_below (X.Window sibling) {
             var wc = X.WindowChanges ();
             wc.sibling = sibling;
             wc.stack_mode = 1; /* Below */
             dpy.configure_window (win, (uint) (Xc.CW_SIBLING | Xc.CW_STACK_MODE), wc);
+        }
+
+        /* Superficie cairo de la propia ventana: lo que se dibuje en ella (o en
+         * superficies similares) se compone en el servidor X con XRender, sin
+         * subir imágenes completas en cada fotograma. */
+        public Cairo.Surface xlib_surface () {
+            return CairoX.surface_create (dpy, win, visual, width, height);
         }
 
         /* Lienzo nuevo del tamaño de la ventana (transparente). */

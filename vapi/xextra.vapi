@@ -63,6 +63,13 @@ namespace Xx {
     [CCode (cname = "XRefreshKeyboardMapping")]
     public int refresh_keyboard_mapping (X.Event* ev);
 
+    [CCode (cname = "XGetImage")]
+    public X.Image? get_image (X.Display dpy, X.Window d, int x, int y, uint w, uint h,
+                               ulong plane_mask, int format);
+
+    [CCode (cname = "XDestroyWindow")]
+    public int destroy_window (X.Display dpy, X.Window w);
+
     [CCode (cname = "XQueryPointer")]
     public bool query_pointer (X.Display dpy, X.Window w, out X.Window root_ret,
                                out X.Window child_ret, out int root_x, out int root_y,
@@ -166,4 +173,23 @@ namespace Xv {
 namespace CairoX {
     [CCode (cname = "cairo_xlib_surface_create")]
     public Cairo.Surface surface_create (X.Display dpy, X.Window drawable, X.Visual visual, int w, int h);
+}
+
+/* DAMAGE: saber cuándo una ventana ya se ha dibujado (sin destellos) */
+[CCode (cheader_filename = "X11/extensions/Xdamage.h")]
+namespace Xd {
+    [CCode (cname = "XDamageQueryExtension")]
+    public bool query_extension (X.Display dpy, out int event_base, out int error_base);
+
+    [CCode (cname = "XDamageCreate")]
+    public ulong create (X.Display dpy, X.Window drawable, int level);
+
+    [CCode (cname = "XDamageDestroy")]
+    public void destroy (X.Display dpy, ulong damage);
+
+    [CCode (cname = "XDamageReportNonEmpty")]
+    public const int REPORT_NON_EMPTY;
+
+    [CCode (cname = "XDamageNotify")]
+    public const int NOTIFY;
 }

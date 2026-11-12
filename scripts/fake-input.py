@@ -9,6 +9,7 @@ Uso (sobre $DISPLAY):
   fake-input.py pixel WIN X Y              imprime el píxel ARGB de una ventana
 """
 import ctypes
+import os
 import sys
 import time
 
@@ -80,4 +81,4 @@ elif cmd in ("down", "up"):
 else:
     sys.exit(__doc__)
 x11.XSync(dpy, 0)
-time.sleep(0.15)
+time.sleep(float(os.environ.get("FI_SLEEP", "0.15")))  # FI_SLEEP=0 para medir tiempos

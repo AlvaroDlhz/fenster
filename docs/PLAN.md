@@ -107,7 +107,13 @@ Curva: *ease-out*, sin rebotes (salvo avisos urgentes).
 ### Fase 4 — Extras
 - [x] Cuartos de pantalla: arrastrando a las esquinas (franja de 80 px) y con
       Super+↑/↓ desde una mitad (mitad → cuarto → maximizar / restaurar)
-- [ ] Minimizar hacia el icono en Dock-e (`_NET_WM_ICON_GEOMETRY`)
-- [ ] Reglas por aplicación (archivo de configuración)
+- [x] Animación de minimizar/restaurar en el sitio (encoger al 90 %, bajar 16 px
+      y desvanecer en 220 ms), animada por Fenster con XRender: funciona con
+      picom v10. (Se probó hacia el icono de Dock-e y se descartó: con el dock
+      oculto el destino no se ve.)
+- [x] Reglas por aplicación en `~/.config/fenster/fenster.conf` (escritorio,
+      monitor, tamaño, posición, estado, encima, Alt+Tab, foco); se recarga sola
+- [x] Redimensionado enlazado: las ventanas pegadas comparten el borde al
+      cambiar de tamaño (vecinas y hermanas alineadas, respetando mínimos)
 - [ ] Vista general de ventanas (tipo Mission Control)
 - [ ] Barra de título mínima opcional para apps sin CSD

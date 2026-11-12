@@ -33,6 +33,7 @@ namespace Fenster {
         Rect workarea;          /* _NET_WORKAREA global (compatibilidad) */
         Monitors monitors;
         int rr_event_base = -1;
+        int damage_event_base = -1;
 
         /* Escritorios virtuales */
         uint n_desktops = 4;
@@ -45,6 +46,7 @@ namespace Fenster {
         int drag_px;
         int drag_py;
         Rect drag_start;
+        GenericArray<ResizeLink> links = new GenericArray<ResizeLink> ();
 
         /* Alt+Tab (una entrada por aplicación, como macOS) */
         bool cycling = false;
@@ -68,7 +70,11 @@ namespace Fenster {
         /* Arranque                                                          */
         /* ---------------------------------------------------------------- */
 
-        public WindowManager () throws Error {
+        Config config;
+
+        public WindowManager (string? config_path = null) throws Error {
+            config = new Config (config_path);
+            config.load ();
             dpy = new X.Display (null);
             if (dpy == null) {
                 throw new IOError.FAILED ("No se pudo abrir el display X11 (¿está definida $DISPLAY?)");
@@ -86,6 +92,10 @@ namespace Fenster {
                 warning ("RandR no disponible: se usará un solo monitor");
             }
             monitors = new Monitors (randr);
+            int dmg_err;
+            if (!Xd.query_extension (dpy, out damage_event_base, out dmg_err)) {
+                damage_event_base = -1;
+            }
         }
 
         public void start (bool replace) throws Error {
@@ -107,6 +117,8 @@ namespace Fenster {
                 Xrr.select_input (dpy, root, Xrr.SCREEN_CHANGE_NOTIFY_MASK);
             }
             monitors.refresh (dpy, root, screen_w, screen_h);
+            n_desktops = config.desktops;
+            config.watch ();
             /* Heredar escritorios y ventana activa del gestor anterior (p. ej. xfwm4) */
             var nd = get_longs (root, atoms.net_number_of_desktops, Xc.XA_CARDINAL, 1);
             if (nd.length > 0 && nd[0] >= 1 && nd[0] <= MAX_DESKTOPS) {
@@ -238,6 +250,10 @@ namespace Fenster {
         /* ---------------------------------------------------------------- */
 
         void handle_event (ref X.Event ev) {
+            if (damage_event_base >= 0 && ev.type == damage_event_base + Xd.NOTIFY) {
+                on_painted (ev.xany.window);  /* XDamageNotifyEvent.drawable */
+                return;
+            }
             if (rr_event_base >= 0 && ev.type == rr_event_base + Xrr.SCREEN_CHANGE_NOTIFY) {
                 Xrr.update_configuration (&ev);
                 on_screen_change ();
@@ -506,6 +522,12 @@ namespace Fenster {
             read_csd (c);
             c.hints = SizeHints.parse (get_longs (w, atoms.wm_normal_hints, (X.Atom) 41, 18));
             read_wm_class (c);
+            Rule? rule = c.kind.is_chrome () ? null : config.match (c.wm_instance, c.wm_class, read_title (w));
+            if (rule != null) {
+                debug ("regla «%s» para %s", rule.name, c.wm_class);
+                if (rule.above == 1) c.above = true;
+                if (rule.in_switcher == 0) c.skip_taskbar = true;
+            }
             var wmh = WmHints.parse (get_longs (w, atoms.wm_hints, atoms.wm_hints, 9));
             c.accepts_input = wmh.accepts_input;
             c.urgent = wmh.urgent;
@@ -535,6 +557,10 @@ namespace Fenster {
                 c.desktop = ALL_DESKTOPS;
             } else if (parent != null) {
                 c.desktop = parent.desktop;
+            } else if (rule != null && rule.desktop != null && !existing) {
+                var rd = rule.desktop.down ();
+                uint req = (rd == "todos" || rd == "all") ? ALL_DESKTOPS : (uint) (int.parse (rd) - 1);
+                c.desktop = (req < n_desktops || req == ALL_DESKTOPS) ? req : current_desktop;
             } else {
                 var d = get_longs (w, atoms.net_wm_desktop, Xc.XA_CARDINAL, 1);
                 uint req = d.length > 0 ? (uint) d[0] : current_desktop;
@@ -547,9 +573,17 @@ namespace Fenster {
             bool iconic = existing
                 ? start_minimized && (want_hidden || net_state.length == 0)
                 : (wmh.start_iconic || want_hidden);
+            string rule_state = rule != null && !existing ? (rule.state ?? "").down () : "";
+            if (rule_state == "minimizada" || rule_state == "minimized") {
+                iconic = true;
+            }
 
+            Monitor? rule_mon = null;
             if (!c.kind.is_chrome ()) {
                 c.geom = place (c);
+                if (rule != null && !existing) {
+                    rule_mon = apply_rule_geometry (c, rule);
+                }
             }
 
             dpy.select_input (w, (long) Xc.PROPERTY_CHANGE_MASK);
@@ -588,8 +622,11 @@ namespace Fenster {
             } else {
                 dpy.map_window (w);
                 set_wm_state (c, Xc.NORMAL_STATE);
-                if (want_fs) {
+                var rule_zone = rule != null && !existing ? rule.snap_zone () : SnapZone.NONE;
+                if (want_fs || rule_state == "pantalla-completa" || rule_state == "fullscreen") {
                     set_fullscreen (c, true);
+                } else if (rule_zone != SnapZone.NONE) {
+                    snap (c, rule_zone, rule_mon ?? monitor_of (c));
                 } else if (want_max) {
                     set_maximized (c, true);
                 }
@@ -605,7 +642,8 @@ namespace Fenster {
             }
 
             /* Foco: las ventanas heredadas no lo toman; las nuevas solo si no lo roban. */
-            bool take_focus = !existing && c.can_focus () && should_focus_new (c);
+            bool rule_no_focus = rule != null && rule.take_focus == 0;
+            bool take_focus = !existing && c.can_focus () && !rule_no_focus && should_focus_new (c);
             if (!take_focus && !existing && c.can_focus () && focused != null) {
                 /* Queda justo debajo de la ventana activa y pide atención */
                 stacking.remove (c);
@@ -614,7 +652,9 @@ namespace Fenster {
                     if (stacking[i] == focused) idx = i;
                 }
                 stacking.insert (idx, c);
-                set_urgent (c, true);
+                if (!rule_no_focus) {
+                    set_urgent (c, true);  /* robo de foco evitado: pedir atención */
+                }
             }
             restack ();
             update_client_lists ();
@@ -640,6 +680,14 @@ namespace Fenster {
             clients.remove (c);
             stacking.remove (c);
             mru.remove (c);
+            if (c.anim != null) {
+                c.anim.finish ();
+                c.anim = null;
+            }
+            if (c.paint_damage != 0 && !destroyed) {
+                Xd.destroy (dpy, c.paint_damage);
+            }
+            c.paint_damage = 0;
             uint t = anim_timers[c];
             if (t != 0) {
                 Source.remove (t);
@@ -685,6 +733,40 @@ namespace Fenster {
             g.x = int.max (wa.x - (int) c.csd[0], int.min (g.x, wa.x + wa.w - g.w + (int) c.csd[1]));
             g.y = int.max (wa.y - (int) c.csd[2], int.min (g.y, wa.y + wa.h - g.h + (int) c.csd[3]));
             return g;
+        }
+
+        /* Monitor, tamaño y posición de una regla. Devuelve el monitor elegido. */
+        Monitor? apply_rule_geometry (Client c, Rule rule) {
+            Monitor? mon = null;
+            if (rule.monitor != null) {
+                var m = rule.monitor.down ();
+                if (m == "principal" || m == "primary") {
+                    mon = monitors.primary ();
+                } else {
+                    int i = int.parse (m) - 1;
+                    if (i >= 0 && i < monitors.list.length) mon = monitors.list[i];
+                }
+            }
+            var target = mon ?? monitor_of (c);
+            var wa = target.work;
+            var g = c.geom;
+            int w, h;
+            if (rule.parse_size (wa, out w, out h)) {
+                c.hints.constrain (ref w, ref h, false);
+                g.w = int.min (w, wa.w);
+                g.h = int.min (h, wa.h);
+            }
+            int px, py;
+            if (rule.parse_position (out px, out py)) {
+                g.x = wa.x + px;
+                g.y = wa.y + py;
+            } else if (rule.centered () || mon != null || rule.size != null) {
+                g.x = wa.x + (wa.w - g.w) / 2;
+                g.y = wa.y + (wa.h - g.h) / 2;
+            }
+            c.geom = g;
+            dpy.move_resize_window (c.win, g.x, g.y, g.w, g.h);
+            return target;
         }
 
         void apply_geometry (Client c, Rect g) {
@@ -767,7 +849,17 @@ namespace Fenster {
                 switch_desktop (c.desktop);
             }
             if (c.minimized) {
-                unminimize (c);
+                /* El foco, cuando la ventana ya esté visible tras la animación */
+                raise (c);
+                var win = c.win;
+                unminimize (c, () => {
+                    var still = find (win);
+                    if (still != null) {
+                        focus (still);
+                        raise (still);
+                    }
+                });
+                return;
             }
             focus (c);
             raise (c);
@@ -833,10 +925,37 @@ namespace Fenster {
             if (c.minimized || c.kind.is_chrome ()) {
                 return;
             }
+            if (c.anim != null) {
+                c.anim.finish ();
+            }
+            /* Captura antes de ocultar, para la animación en el sitio */
+            Rect shot_rect = c.geom;
+            var shot = c.hidden_by_desktop ? null : snapshot (c, out shot_rect);
             c.minimized = true;
             set_anim (c, "minimize");
             c.ignore_unmaps++;
-            dpy.unmap_window (c.win);
+            if (shot != null && config.animations) {
+                c.mini_snapshot = shot;
+                c.mini_rect = shot_rect;
+                /* Primero la animación encima (su primer fotograma es idéntico a la
+                 * ventana) y luego ocultar la ventana ya tapada: sin fotograma vacío */
+                start_minimize_anim (c, false, null);
+                var win = c.win;
+                Timeout.add (24, () => {
+                    var still = find (win);
+                    if (still != null) {
+                        if (still.minimized) {
+                            dpy.unmap_window (still.win);
+                        } else {
+                            still.ignore_unmaps--;  /* se restauró antes de ocultarse */
+                        }
+                        dpy.flush ();
+                    }
+                    return Source.REMOVE;
+                });
+            } else {
+                dpy.unmap_window (c.win);
+            }
             set_wm_state (c, Xc.ICONIC_STATE);
             update_net_wm_state (c);
             if (focused == c) {
@@ -845,12 +964,107 @@ namespace Fenster {
             }
         }
 
-        void unminimize (Client c) {
+        /* Restaurar: la captura sube, crece y aparece en su sitio y, al terminar,
+         * se muestra la ventana real; «after» se ejecuta entonces (p. ej. enfocar). */
+        void unminimize (Client c, owned MinimizeAnimation.Done? after = null) {
+            if (c.anim != null) {
+                c.anim.finish ();
+            }
             c.minimized = false;
-            set_anim (c, "minimize");
-            dpy.map_window (c.win);
             set_wm_state (c, Xc.NORMAL_STATE);
             update_net_wm_state (c);
+            if (c.mini_snapshot != null && !c.hidden_by_desktop) {
+                var win = c.win;
+                start_minimize_anim (c, true, () => {
+                    var still = find (win);
+                    if (still != null && !still.minimized && !still.hidden_by_desktop) {
+                        set_anim (still, "minimize");
+                        /* La ventana real aparece DEBAJO de la captura; la captura
+                         * se retira cuando la app ya se ha dibujado (on_painted) */
+                        wait_for_paint (still);
+                        dpy.map_window (still.win);
+                        if (after != null) after ();
+                        if (still.anim != null && !still.anim.finished) {
+                            still.anim.raise_above ();
+                        }
+                    }
+                });
+                c.mini_snapshot = null;
+                return;
+            }
+            c.mini_snapshot = null;
+            set_anim (c, "minimize");
+            dpy.map_window (c.win);
+            if (after != null) after ();
+        }
+
+        /* DAMAGE avisa cuando la ventana recién mostrada ya tiene contenido. */
+        void wait_for_paint (Client c) {
+            if (damage_event_base < 0) {
+                return;  /* sin DAMAGE: la captura se retira a los 300 ms */
+            }
+            if (c.paint_damage != 0) {
+                Xd.destroy (dpy, c.paint_damage);
+            }
+            c.paint_damage = Xd.create (dpy, c.win, Xd.REPORT_NON_EMPTY);
+        }
+
+        void on_painted (X.Window w) {
+            var c = find (w);
+            if (c == null || c.paint_damage == 0) {
+                return;
+            }
+            Xd.destroy (dpy, c.paint_damage);
+            c.paint_damage = 0;
+            /* Dos fotogramas para que el compositor muestre lo pintado */
+            var anim = c.anim;
+            Timeout.add (32, () => {
+                if (anim != null) {
+                    anim.finish ();
+                }
+                return Source.REMOVE;
+            });
+        }
+
+        void start_minimize_anim (Client c, bool restoring, owned MinimizeAnimation.Done? done) {
+            var snap = c.mini_snapshot;
+            if (snap == null) {
+                if (done != null) done ();
+                return;
+            }
+            var anim = new MinimizeAnimation (dpy, root, screen, atoms, snap, c.mini_rect,
+                                              restoring, (owned) done);
+            c.anim = anim;
+            anim.start ();
+        }
+
+        /* Captura de la parte visible de una ventana. */
+        Cairo.ImageSurface? snapshot (Client c, out Rect area) {
+            var g = c.geom;
+            int x0 = int.max (g.x, 0), y0 = int.max (g.y, 0);
+            int x1 = int.min (g.x + g.w, screen_w), y1 = int.min (g.y + g.h, screen_h);
+            area = Rect (x0, y0, x1 - x0, y1 - y0);
+            if (area.w < 16 || area.h < 16) {
+                return null;
+            }
+            last_error = 0;
+            var img = Xx.get_image (dpy, c.win, x0 - g.x, y0 - g.y, area.w, area.h,
+                                    ulong.MAX /* AllPlanes */, 2 /* ZPixmap */);
+            if (img == null || last_error != 0 || img.bits_per_pixel != 32) {
+                return null;
+            }
+            var full = new Cairo.ImageSurface (img.depth == 32 ? Cairo.Format.ARGB32 : Cairo.Format.RGB24,
+                                               area.w, area.h);
+            full.flush ();
+            uchar* dst = full.get_data ();
+            int stride = full.get_stride ();
+            uchar* src = (uchar*) img.data;
+            for (int y = 0; y < area.h; y++) {
+                Memory.copy (dst + y * stride, src + y * img.bytes_per_line, area.w * 4);
+            }
+            full.mark_dirty ();
+            /* A resolución completa: la animación se ve casi a tamaño real (90-100 %) */
+            return full;
         }
 
         void set_maximized (Client c, bool on, Monitor? target = null) {
@@ -999,6 +1213,18 @@ namespace Fenster {
             drag_px = px;
             drag_py = py;
             drag_start = c.geom;
+            links = new GenericArray<ResizeLink> ();
+            if (mode == DragMode.RESIZE) {
+                /* Redimensionar a mano deja de ser "mitad"/"maximizada" */
+                if (c.snapped || c.maximized) {
+                    c.snapped = false;
+                    c.maximized = false;
+                    update_net_wm_state (c);
+                }
+                if (config.linked_resize) {
+                    find_resize_links (c, dir);
+                }
+            }
             uint shape = mode == DragMode.MOVE ? Xc.XC_FLEUR : Xc.XC_BOTTOM_RIGHT_CORNER;
             dpy.grab_pointer (root, false,
                               (uint) (Xc.BUTTON_RELEASE_MASK | Xc.POINTER_MOTION_MASK),
@@ -1019,28 +1245,32 @@ namespace Fenster {
                 update_snap_preview (x, y);
             } else {
                 int d = drag_dir;
-                if (d == DIR_LEFT || d == DIR_TOPLEFT || d == DIR_BOTTOMLEFT) {
-                    int w = int.max (MIN_SIZE, drag_start.w - dx);
-                    g.x = drag_start.x + drag_start.w - w;
+                bool l = d == DIR_LEFT || d == DIR_TOPLEFT || d == DIR_BOTTOMLEFT;
+                bool r = d == DIR_RIGHT || d == DIR_TOPRIGHT || d == DIR_BOTTOMRIGHT;
+                bool t = d == DIR_TOP || d == DIR_TOPLEFT || d == DIR_TOPRIGHT;
+                bool b = d == DIR_BOTTOM || d == DIR_BOTTOMLEFT || d == DIR_BOTTOMRIGHT;
+                var c = drag_client;
+                /* Desplazamiento de cada borde, en coordenadas visibles */
+                var av = LinkedResize.visible (c, drag_start);
+                int dl = l ? dx : 0, dr = r ? dx : 0, dt = t ? dy : 0, db = b ? dy : 0;
+                LinkedResize.clamp (ref dl, ref dr, ref dt, ref db, av,
+                                    LinkedResize.min_w (c), LinkedResize.min_h (c), links);
+                g = with_csd (c, Rect (av.x + dl, av.y + dt, av.w + dr - dl, av.h + db - dt));
+                if (links.length == 0) {
+                    /* Sola: incrementos de terminal (de carácter en carácter) */
+                    int w = g.w, h = g.h;
+                    c.hints.constrain (ref w, ref h, true);
+                    if (l) g.x += g.w - w;
+                    if (t) g.y += g.h - h;
                     g.w = w;
-                }
-                if (d == DIR_RIGHT || d == DIR_TOPRIGHT || d == DIR_BOTTOMRIGHT) {
-                    g.w = int.max (MIN_SIZE, drag_start.w + dx);
-                }
-                if (d == DIR_TOP || d == DIR_TOPLEFT || d == DIR_TOPRIGHT) {
-                    int h = int.max (MIN_SIZE, drag_start.h - dy);
-                    g.y = drag_start.y + drag_start.h - h;
                     g.h = h;
+                } else {
+                    /* Enlazada: las vecinas siguen al borde común, sin huecos */
+                    for (int i = 0; i < links.length; i++) {
+                        var k = links[i];
+                        apply_geometry (k.c, with_csd (k.c, LinkedResize.moved (k, dl, dr, dt, db)));
+                    }
                 }
-                if (d == DIR_BOTTOM || d == DIR_BOTTOMLEFT || d == DIR_BOTTOMRIGHT) {
-                    g.h = int.max (MIN_SIZE, drag_start.h + dy);
-                }
-                int w = g.w, h = g.h;
-                drag_client.hints.constrain (ref w, ref h, true);
-                if (d == DIR_LEFT || d == DIR_TOPLEFT || d == DIR_BOTTOMLEFT) g.x += g.w - w;
-                if (d == DIR_TOP || d == DIR_TOPLEFT || d == DIR_TOPRIGHT) g.y += g.h - h;
-                g.w = w;
-                g.h = h;
             }
             apply_geometry (drag_client, g);
         }
@@ -1074,7 +1304,35 @@ namespace Fenster {
             snap (c, zone, mon);
         }
 
+        /* Ventanas pegadas al borde que se va a arrastrar (mismo escritorio, visibles). */
+        void find_resize_links (Client c, int dir) {
+            var cands = new GenericArray<Client> ();
+            clients.foreach ((o) => {
+                if (o != c && !o.kind.is_chrome () && !o.minimized && !o.hidden_by_desktop
+                    && !o.fullscreen && o.transient_for == 0 && o.on_desktop (current_desktop)) {
+                    cands.add (o);
+                }
+            });
+            bool l = dir == DIR_LEFT || dir == DIR_TOPLEFT || dir == DIR_BOTTOMLEFT;
+            bool r = dir == DIR_RIGHT || dir == DIR_TOPRIGHT || dir == DIR_BOTTOMRIGHT;
+            bool t = dir == DIR_TOP || dir == DIR_TOPLEFT || dir == DIR_TOPRIGHT;
+            bool b = dir == DIR_BOTTOM || dir == DIR_BOTTOMLEFT || dir == DIR_BOTTOMRIGHT;
+            links = LinkedResize.find (LinkedResize.visible (c, c.geom), l, r, t, b, cands);
+            for (int i = 0; i < links.length; i++) {
+                var k = links[i].c;
+                if (k.snapped || k.maximized) {
+                    k.snapped = false;
+                    k.maximized = false;
+                    update_net_wm_state (k);
+                }
+            }
+            if (links.length > 0) {
+                debug ("redimensionado enlazado con %d ventana(s)", links.length);
+            }
+        }
+
         void end_drag () {
+            links = new GenericArray<ResizeLink> ();
             drag = DragMode.NONE;
             drag_client = null;
             drag_zone = SnapZone.NONE;
@@ -1320,6 +1578,14 @@ namespace Fenster {
         /* ---------------------------------------------------------------- */
         /* Iconos                                                            */
         /* ---------------------------------------------------------------- */
+
+        string read_title (X.Window w) {
+            var b = get_bytes (w, atoms.net_wm_name, atoms.utf8_string);
+            if (b.length == 0) {
+                b = get_bytes (w, (X.Atom) 39 /* WM_NAME */, (X.Atom) 31 /* STRING */);
+            }
+            return b.length > 0 ? ((string) b).make_valid () : "";
+        }
 
         void read_wm_class (Client c) {
             var b = get_bytes (c.win, atoms.wm_class, (X.Atom) 31 /* STRING */);

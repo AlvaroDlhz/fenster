@@ -6,6 +6,7 @@
   test-client.py modal     ventana madre + diálogo modal
   test-client.py urgent    se marca urgente (WM_HINTS) al segundo de abrirse
   test-client.py noicon    sin _NET_WM_ICON y con WM_CLASS de Thunar (como Oboete)
+  test-client.py plain-X   ventana normal titulada «prueba-plain-X» (para reglas)
 """
 import sys
 
@@ -38,7 +39,7 @@ elif mode == "modal":
     GLib.timeout_add(300, open_dialog)
 elif mode == "noicon":
     Gtk.Window.set_default_icon_list([])
-elif mode != "":
+elif mode != "" and not mode.startswith("plain-"):
     sys.exit(__doc__)
 
 win.show_all()
